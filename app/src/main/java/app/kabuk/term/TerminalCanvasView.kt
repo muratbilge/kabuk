@@ -574,20 +574,15 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
         showKeyboard()
     }
 
-    private val urlRegex = Regex("""(https?://|www\.)[^\s<>"'`]+[^\s<>"'`.,;:)\]}!?]""")
 
     /** a link under the finger; looks at the whole wrapped line so long URLs work */
     private fun linkAt(x: Float, y: Float): String? {
         val em = emulator ?: return null
         val row = rowAt(y); val col = colAt(x)
-        var start = row
-        while (start > -em.screen.activeTranscriptRows && em.screen.getLineWrap(start - 1)) start--
-        var end = row
-        while (end < em.mRows - 1 && em.screen.getLineWrap(end)) end++
-        val text = em.screen.getSelectedText(0, start, em.mColumns - 1, end, true, false).replace("\n", "")
-        val offset = (row - start) * em.mColumns + col
-        return urlRegex.findAll(text).firstOrNull { offset in it.range }?.value
-            ?.let { if (it.startsWith("www.")) "https://$it" else it }
+        val (l, r) = paneBounds(col, row)
+        return linkIn(row, col, l, r, -em.screen.activeTranscriptRows, em.mRows - 1) { rr ->
+            em.screen.getSelectedText(l, rr, r, rr) to em.screen.getLineWrap(rr)
+        }
     }
 
     // ------------------------------------------------------------------ keyboard
@@ -765,4 +760,36 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
 
     fun linesInView() = emulator?.mRows ?: 24
     fun scrollBy(rows: Int) = scrollRows(rows, width / 2f, height / 2f)
+}
+
+/**
+ * The link under ([row], [col]) inside the pane [l]..[r]. Programs like herdr and Claude Code wrap long lines
+ * themselves (hard line breaks, maybe indented), so a URL continues on the next row as long as its row is full
+ * to the pane's edge; the terminal's own soft wraps count too. [line] gives a row's text in the pane and
+ * whether the terminal soft-wrapped it.
+ */
+// borders and herdr's scrollbar (│ ┃ ▕ ▐ ▏) never belong to a link
+private val urlRegex = Regex("""(https?://|www\.)[^\s<>"'`│┃▕▐▏]+[^\s<>"'`.,;:)\]}!?│┃▕▐▏]""")
+
+internal fun linkIn(row: Int, col: Int, l: Int, r: Int, firstRow: Int, lastRow: Int, line: (Int) -> Pair<String, Boolean>): String? {
+    val edge = charArrayOf('│', '┃', '▕', '▐', '▏')
+    val width = r - l + 1
+    fun text(rr: Int) = line(rr).first.trimEnd().trimEnd(*edge).trimEnd()
+    // a row the URL runs out of: soft-wrapped, or filled up to (almost) the pane's edge with no space at the end
+    fun continues(rr: Int) = line(rr).second || text(rr).let { it.length >= width - 2 && it.isNotEmpty() && !it.last().isWhitespace() }
+    var start = row
+    while (start > firstRow && row - start < 12 && continues(start - 1)) start--
+    var end = row
+    while (end < lastRow && end - row < 12 && continues(end)) end++
+    val sb = StringBuilder()
+    var offset = -1
+    for (rr in start..end) {
+        val t = text(rr)
+        // a continued row starts at its first non-space (the program's indent isn't part of the URL)
+        val skip = if (rr == start) 0 else t.length - t.trimStart().length
+        if (rr == row) offset = sb.length + (col - l - skip).coerceAtLeast(0)
+        sb.append(t.substring(skip))
+    }
+    return urlRegex.findAll(sb).firstOrNull { offset in it.range }?.value
+        ?.let { if (it.startsWith("www.")) "https://$it" else it }
 }
