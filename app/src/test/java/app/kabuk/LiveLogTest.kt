@@ -44,7 +44,7 @@ class LiveLogTest {
         assertEquals("http://h:1/log", url)
         assertEquals("dev", seen["X-Device"]); assertEquals("st", seen["X-Stream"])
         assertEquals("0", seen["X-Seq-First"]); assertEquals("1", seen["X-Seq-Last"])
-        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec("tok".toByteArray(), "HmacSHA256")); update("1000\n".toByteArray()) }
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec("tok".toByteArray(), "HmacSHA256")); update("1000\ndev\nst\n0\n1\n0\n\n".toByteArray()) }
         assertEquals(mac.doFinal(body).joinToString("") { "%02x".format(it) }, seen["X-Signature"])
         assertEquals(ShipResult.NOTHING, s.shipOnce())
     }

@@ -132,7 +132,11 @@ class Handler(BaseHTTPRequestHandler):
         ts, sig = self.headers.get("X-Timestamp", ""), self.headers.get("X-Signature", "")
         if not TOKEN or not ts.isdigit() or abs(time.time() - int(ts)) > MAX_SKEW:
             return False
-        expected = hmac.new(TOKEN.encode(), ts.encode() + b"\n" + body, hashlib.sha256).hexdigest()
+        # timestamp and every header acted on (device, sequence, dedupe) are signed with the body
+        signed = [ts] + [self.headers.get(h, "") for h in
+                         ("X-Device", "X-Stream", "X-Seq-First", "X-Seq-Last", "X-Dropped", "X-Once")]
+        prefix = "".join(v + "\n" for v in signed).encode()
+        expected = hmac.new(TOKEN.encode(), prefix + body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, sig)
 
     def do_POST(self):

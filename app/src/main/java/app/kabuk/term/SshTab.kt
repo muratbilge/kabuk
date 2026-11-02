@@ -393,6 +393,12 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
             liveAgents = false
             KLog.i("AGENT", "orch watch ended: $end")
+            // nothing shown may be answered from a stream that is gone: clear it until the next snapshot
+            agents.value = emptyList()
+            questions.value = emptyMap()
+            busQuestions.value = emptyList()
+            timeline.value = emptyList()
+            TabManager.agentsChanged(this)
             // orch not installed there: look again once a minute
             try { Thread.sleep(if (end == Herdr.StreamEnd.UNAVAILABLE) 60_000 else 3_000) } catch (_: InterruptedException) { return }
         }

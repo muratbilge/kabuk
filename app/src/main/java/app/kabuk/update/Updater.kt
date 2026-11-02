@@ -131,11 +131,23 @@ class Updater(private val ctx: Context) {
             setRequestProperty("Connection", "close"); useCaches = false
         }
 
+    /** up to [limit] bytes (InputStream.readNBytes needs API 33; Kabuk runs from 26) */
+    private fun readAtMost(input: java.io.InputStream, limit: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        while (out.size() < limit) {
+            val n = input.read(buf, 0, minOf(buf.size, limit - out.size()))
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     private fun get(name: String, max: Int): ByteArray {
         val http = open(base + name)
         try {
             if (http.responseCode != 200) throw UpdateException("update server answered HTTP ${http.responseCode}")
-            val bytes = http.inputStream.use { it.readNBytes(max + 1) }
+            val bytes = http.inputStream.use { readAtMost(it, max + 1) }
             if (bytes.size > max) throw UpdateException("update.json is too big")
             return bytes
         } finally {

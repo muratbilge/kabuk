@@ -62,7 +62,7 @@ private class HttpPoster : Poster {
 
 /**
  * Sends one batch per [shipOnce] with the receiver's protocol (scripts/logsink/logsink.py): HMAC-SHA256 over
- * "<timestamp>\n<body>" with the shared token (the token itself is never sent), X-Stream/X-Seq-* so a resent batch is
+ * [canonical] (timestamp, device, stream, sequence, dropped, once — one per line) + body with the shared token (the token itself is never sent), X-Stream/X-Seq-* so a resent batch is
  * stored once. Lines leave the queue only after a 204.
  */
 class LogShipper(
@@ -80,11 +80,11 @@ class LogShipper(
         val batch = outbox.peek() ?: return ShipResult.NOTHING
         val body = batch.lines.joinToString("\n").toByteArray(Charsets.UTF_8)
         val ts = (now() / 1000).toString()
-        val headers = mapOf(
-            "X-Timestamp" to ts, "X-Signature" to hmac(ts, body), "X-Device" to device,
-            "X-Stream" to batch.stream, "X-Seq-First" to batch.first.toString(), "X-Seq-Last" to batch.last.toString(),
-            "X-Dropped" to batch.dropped.toString(),
+        val signed = mapOf(
+            "X-Device" to device, "X-Stream" to batch.stream, "X-Seq-First" to batch.first.toString(),
+            "X-Seq-Last" to batch.last.toString(), "X-Dropped" to batch.dropped.toString(),
         )
+        val headers = signed + mapOf("X-Timestamp" to ts, "X-Signature" to hmac(canonical(ts, signed), body))
         return when (poster.post(url.trimEnd('/') + "/log", headers, body)) {
             204 -> ShipResult.SENT.also { outbox.acknowledge(batch.last, batch.dropped) }
             null -> ShipResult.OFFLINE
@@ -92,9 +92,16 @@ class LogShipper(
         }
     }
 
-    private fun hmac(ts: String, body: ByteArray): String {
+    private fun hmac(prefix: String, body: ByteArray): String {
         val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(token.toByteArray(), "HmacSHA256")) }
-        mac.update(ts.toByteArray()); mac.update('\n'.code.toByte())
+        mac.update(prefix.toByteArray(Charsets.UTF_8))
         return mac.doFinal(body).joinToString("") { "%02x".format(it) }
+    }
+
+    companion object {
+        /** what the signature covers besides the body: the timestamp and every header the sink acts on */
+        fun canonical(ts: String, h: Map<String, String>) =
+            listOf(ts, h["X-Device"], h["X-Stream"], h["X-Seq-First"], h["X-Seq-Last"], h["X-Dropped"], h["X-Once"])
+                .joinToString("") { (it ?: "") + "\n" }
     }
 }

@@ -21,6 +21,7 @@ data class BusMessage(val id: Long, val tsMs: Long, val from: String, val to: St
  */
 object Orch {
     /** a non-login SSH shell often lacks ~/.local/bin; agents started from here need it too */
+    private const val HEARTBEAT_DEADLINE_MS = 150_000L
     private const val FIND = "export PATH=\"\$HOME/.local/bin:\$PATH\"; O=\$(command -v orch) || exit 3; "
 
     class Update(
@@ -75,14 +76,32 @@ object Orch {
             val cmd = session.exec(FIND + "exec \"\$O\" watch --json")
             val reader = cmd.inputStream.bufferedReader()
             var any = false
+            // orch watch prints at least every 60 s: silence for longer means a stuck stream, so close it
+            // (the caller then clears what it showed and starts again)
+            val lastLine = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val watchdog = kotlin.concurrent.thread(name = "orch-watchdog", isDaemon = true) {
+                try {
+                    while (true) {
+                        Thread.sleep(5_000)
+                        if (System.currentTimeMillis() - lastLine.get() > HEARTBEAT_DEADLINE_MS || !active()) {
+                            if (active()) KLog.w("AGENT", "orch watch silent for ${HEARTBEAT_DEADLINE_MS / 1000} s: reconnecting")
+                            runCatching { session.close() }
+                            break
+                        }
+                    }
+                } catch (_: InterruptedException) {}
+            }
+            try {
             while (active()) {
                 val line = reader.readLine() ?: break
+                lastLine.set(System.currentTimeMillis())
                 if (line.isBlank()) continue
                 any = true
                 val u = runCatching { parseUpdate(line) }
                     .onFailure { KLog.w("AGENT", "bad orch watch line (${line.length} chars)", it) }.getOrNull()
                 onUpdate(u)
             }
+            } finally { watchdog.interrupt() }
             if (!any) {
                 cmd.join(3, java.util.concurrent.TimeUnit.SECONDS)
                 if (cmd.exitStatus == 3) return Herdr.StreamEnd.UNAVAILABLE
@@ -98,16 +117,22 @@ object Orch {
      * question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one.
      */
     fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): Boolean {
-        val (code, text) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60", timeoutS = 8)
+        val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
         if (code != 0) return false
-        val now = QuickReplies.pending(text) ?: return false
+        val hash = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
+            ?: return false
+        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return false
         if (now.fingerprint != expect || now.choices.none { it.key == key }) return false
-        return SshTab.exec(c, FIND + "\"\$O\" send ${shellQuote(pane)} ${shellQuote(key)}", timeoutS = 8).first == 0
+        // orchd sends only if the screen is still exactly what we read, and answers each screen once:
+        // a second phone/TUI answering the same dialog is refused instead of reaching the next one
+        return SshTab.exec(
+            c, FIND + "\"\$O\" send ${shellQuote(pane)} ${shellQuote(key)} --expect ${shellQuote(hash)} --lines 60", timeoutS = 8,
+        ).first == 0
     }
 
     /** answers a bus question; false when it was already answered (by Telegram, the TUI, …) or on failure */
     fun answerQuestion(c: SSHClient, id: Long, text: String): Boolean =
-        SshTab.exec(c, FIND + "\"\$O\" answer --by kabuk $id -- ${shellQuote(text)}", timeoutS = 8).first == 0
+        SshTab.exec(c, FIND + "\"\$O\" answer --by kabuk --literal $id -- ${shellQuote(text)}", timeoutS = 8).first == 0
 
     /** a message from you to an agent (by its bus name, or "all") */
     fun send(c: SSHClient, to: String, text: String): Boolean =
