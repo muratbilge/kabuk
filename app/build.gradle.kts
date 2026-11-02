@@ -5,8 +5,8 @@ plugins {
 }
 
 // Single source of the app version. Bump both on every release.
-val appVersionName = "0.4.4"
-val appVersionCode = 21
+val appVersionName = "0.5.0"
+val appVersionCode = 22
 
 base {
     archivesName.set("kabuk-$appVersionName")
@@ -22,6 +22,16 @@ android {
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
+
+        // In-app updater (app.kabuk.update): update.json is signed with the key whose PUBLIC half is app/update-public-key.b64
+        // (private half: ~/.android-keys/kabuk-update-manifest.pem, never in the repo). Overridable in ~/.gradle/gradle.properties.
+        fun prop(name: String, default: String) = providers.gradleProperty(name).getOrElse(default)
+        buildConfigField("String", "UPDATE_URL", "\"${prop("kabuk.updateUrl", "http://192.168.178.11:8000/apk/kabuk/")}\"")
+        buildConfigField("String", "UPDATE_PUBLIC_KEY", "\"${file("update-public-key.b64").readText().trim()}\"")
+        // Live-log receiver (scripts/logsink). The token is supplied at build time only (~/.gradle/gradle.properties:
+        // kabuk.logsinkToken) and never committed; a blank token turns remote logging off.
+        buildConfigField("String", "LOGSINK_URL", "\"${prop("kabuk.logsinkUrl", "http://192.168.178.11:8792")}\"")
+        buildConfigField("String", "LOGSINK_TOKEN", "\"${prop("kabuk.logsinkToken", "")}\"")
     }
 
     buildTypes {

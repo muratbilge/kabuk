@@ -131,6 +131,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Only the public half leaves the phone. The private key is encrypted with the Android Keystore.",
                 fontSize = 12.sp, color = Muted)
 
+            UpdateSection()
+            DiagnosticsSection()
+
             Spacer(Modifier.height(16.dp))
             Text("Kabuk ${BuildConfig.VERSION_NAME} · terminal engine from Termux (Apache 2.0) · SSH by sshj · font JetBrains Mono (OFL)",
                 fontSize = 12.sp, color = Muted)
