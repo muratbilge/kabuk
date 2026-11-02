@@ -10,6 +10,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BT=${BUILD_TOOLS:-$HOME/Android/Sdk/build-tools/35.0.0}
 cd "$ROOT"
+# gradle and apksigner need java; DevBox has no system JDK
+if ! command -v java >/dev/null 2>&1; then
+  JDK=$(ls -d "$HOME"/tools/jdk-17* 2>/dev/null | head -1)
+  [ -n "$JDK" ] && export JAVA_HOME="$JDK" PATH="$JDK/bin:$PATH"
+fi
 ./gradlew --console=plain :app:assembleRelease -q
 IN=$(ls app/build/outputs/apk/release/kabuk-*-release.apk | head -1)
 VER=$(basename "$IN" | sed -E 's/kabuk-(.*)-release.apk/\1/')
