@@ -5,7 +5,7 @@ import app.kabuk.term.SshTab
 import net.schmizz.sshj.SSHClient
 import org.json.JSONObject
 
-/** An AI agent running in a herdr pane on the server. */
+/** An AI agent on the server: in a herdr pane, or (orchtool backend) on the orch bus / in an orch pane. */
 data class Agent(
     val terminalId: String,
     val paneId: String,
@@ -15,6 +15,10 @@ data class Agent(
     val workspace: String,     // the workspace label ("notes-app", "~")
     val workspaceNumber: Int,
     val focused: Boolean,
+    /** its name on the orchtool bus (for messages); empty with herdr */
+    val bus: String = "",
+    /** what it last said about its status (orchtool) */
+    val statusText: String = "",
 ) {
     val needsYou get() = status == "blocked"
     val working get() = status == "working"

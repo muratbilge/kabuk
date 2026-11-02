@@ -199,6 +199,8 @@ class MainActivity : ComponentActivity() {
                 if (tab != null) {
                     TabManager.select(tab.id)
                     screen = Screen.Terminal
+                    // a question from the orchtool bus: its answers are in the agents sheet
+                    if (i.getBooleanExtra("agents", false)) ui.showAgents = true
                     // an answer button from our own notification (other apps don't know the token)
                     val reply = i.getStringExtra("reply")?.takeIf {
                         it.length == 1 && it[0].isDigit() && i.getStringExtra("token") == Settings.shortcutToken()

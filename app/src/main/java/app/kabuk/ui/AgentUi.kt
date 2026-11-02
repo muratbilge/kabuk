@@ -54,8 +54,9 @@ private fun statusColor(a: Agent) = when (a.status) {
 fun AgentsChip(onClick: () -> Unit) {
     val v by TabManager.agentsVersion.collectAsState()
     val all = remember(v) { TabManager.sshTabs().flatMap { it.agents.value } }
-    if (all.isEmpty()) return
-    val needs = all.count { it.needsYou }
+    val asks = remember(v) { TabManager.sshTabs().sumOf { it.busQuestions.value.size } }
+    if (all.isEmpty() && asks == 0) return
+    val needs = all.count { it.needsYou } + asks
     val working = all.count { it.working }
     // logo pink (tertiary container) when someone waits for you; 48dp touch target
     Row(
@@ -90,6 +91,15 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
     val v by TabManager.agentsVersion.collectAsState()
     val rows = remember(v) { TabManager.sshTabs().flatMap { t -> t.agents.value.map { t to it } } }
     var newAgent by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val asks = remember(v) { TabManager.sshTabs().flatMap { t -> t.busQuestions.value.map { t to it } } }
+    val comms = remember(v) { TabManager.sshTabs().filter { it.usesOrch } }
+    // free-text answer to a bus question / a message to an agent
+    var replyTo by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Pair<SshTab, app.kabuk.agents.BusQuestion>?>(null) }
+    var messageOn by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<SshTab?>(null) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        TabManager.agentsOpen = true
+        onDispose { TabManager.agentsOpen = false }
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface1) {
         LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             item {
@@ -98,6 +108,19 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                     if (TabManager.sshTabs().any { it.canSend }) androidx.compose.material3.FilledTonalButton(onClick = { newAgent = true }) {
                         Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("New agent")
                     }
+                }
+            }
+            if (asks.isNotEmpty()) {
+                item {
+                    Text("Asks you", style = MaterialTheme.typography.titleSmall, color = Bad,
+                        modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 2.dp))
+                }
+                items(asks, key = { (t, q) -> "${t.id}/q${q.id}" }) { (t, q) ->
+                    BusQuestionRow(q, onOption = { opt ->
+                        t.answerQuestion(q.id, opt) { ok ->
+                            TabManager.toast(if (ok) "Answered ${q.from}: $opt" else "Not sent: already answered")
+                        }
+                    }, onReply = { replyTo = t to q })
                 }
             }
             listOf("blocked" to "Needs you", "working" to "Working", "done" to "Done", "idle" to "Idle", "unknown" to "Other").forEach { (st, title) ->
@@ -134,9 +157,37 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                     }
                 }
             }
-            if (rows.isEmpty()) item {
-                Text("No agents found. Kabuk lists agents running in herdr.", color = Muted, modifier = Modifier.padding(20.dp))
+            if (rows.isEmpty() && asks.isEmpty()) item {
+                Text("No agents found. Kabuk lists agents from herdr, or from orchtool when the server starts with orch.",
+                    color = Muted, modifier = Modifier.padding(20.dp))
             }
+            comms.forEach { t ->
+                item(key = "comms/${t.id}") {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Comms" + if (comms.size > 1) " · ${t.hostName}" else "", style = MaterialTheme.typography.titleSmall,
+                            color = Muted, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(onClick = { messageOn = t }) { Text("Message…") }
+                    }
+                }
+                val tl = t.timeline.value.takeLast(25).reversed()
+                if (tl.isEmpty()) item(key = "comms-empty/${t.id}") {
+                    Text("Nothing on the bus yet.", color = Muted, modifier = Modifier.padding(horizontal = 20.dp))
+                }
+                items(tl, key = { m -> "${t.id}/m${m.id}" }) { m -> TimelineRow(m) }
+            }
+        }
+    }
+    replyTo?.let { (t, q) ->
+        TextDialog("Answer ${q.from}", q.text, "Your answer", onDismiss = { replyTo = null }) { text ->
+            replyTo = null
+            t.answerQuestion(q.id, text) { ok -> TabManager.toast(if (ok) "Answered ${q.from}" else "Not sent: already answered") }
+        }
+    }
+    messageOn?.let { t ->
+        val names = (t.agents.value.map { it.bus }.filter { it.isNotEmpty() } + "all").distinct()
+        MessageDialog(names, onDismiss = { messageOn = null }) { to, text ->
+            messageOn = null
+            t.sendBus(to, text) { ok -> TabManager.toast(if (ok) "Sent to $to" else "Couldn't send to $to") }
         }
     }
     if (newAgent) NewAgentDialog(rows.map { it.second.cwd }, onDismiss = { newAgent = false }) { dir, tool ->
@@ -230,12 +281,113 @@ private fun NewAgentDialog(known: List<String>, onDismiss: () -> Unit, onStart: 
                         androidx.compose.material3.SuggestionChip(onClick = { dir = s }, label = { Text(s, fontFamily = Mono, maxLines = 1) })
                     }
                 }
-                Text("Opens a new herdr workspace there and starts $tool in it.", style = MaterialTheme.typography.bodySmall, color = Muted)
+                Text("Starts $tool in that folder's workspace (herdr or orch, as the server starts with).", style = MaterialTheme.typography.bodySmall, color = Muted)
             }
         },
         confirmButton = {
             androidx.compose.material3.TextButton(enabled = dir.isNotBlank(), onClick = { onStart(dir.trim(), tool) }) { Text("Start") }
         },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** a question from the orchtool bus: its text, the agent's options as buttons, and "Reply…" for your own words */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun BusQuestionRow(q: app.kabuk.agents.BusQuestion, onOption: (String) -> Unit, onReply: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(Bad))
+            Spacer(Modifier.width(14.dp))
+            Text(q.from, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text("#${q.id}", style = MaterialTheme.typography.labelMedium, color = Muted)
+        }
+        Text(
+            q.text, style = MaterialTheme.typography.bodyMedium, maxLines = 8,
+            modifier = Modifier.padding(start = 24.dp, top = 6.dp).fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp)).background(Surface2).padding(10.dp),
+        )
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.padding(start = 24.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            q.options.forEachIndexed { i, opt ->
+                Row(
+                    Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
+                        .background(if (i == 0) Accent else Color(0xFF2A3B66))
+                        .clickable { onOption(opt) }.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(opt, color = if (i == 0) OnAccent else Color(0xFFD9E2FF), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                }
+            }
+            Row(
+                Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp)).background(Surface2)
+                    .clickable(onClick = onReply).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) { Text("Reply…", color = Text1, style = MaterialTheme.typography.labelLarge) }
+        }
+    }
+}
+
+private val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT)
+
+/** "14:02  codex → murat  done, tests green" */
+@Composable
+private fun TimelineRow(m: app.kabuk.agents.BusMessage) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)) {
+        Text(clock.format(java.util.Date(m.tsMs)), style = MaterialTheme.typography.bodySmall, color = Muted, fontFamily = Mono)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "${m.from} → ${m.to}" + if (m.kind != "msg") " · ${m.kind}" else "",
+                style = MaterialTheme.typography.labelMedium, color = if (m.kind == "ask") Bad else Accent, maxLines = 1,
+            )
+            Text(m.text, style = MaterialTheme.typography.bodySmall, maxLines = 4)
+        }
+    }
+}
+
+/** one text field: answer a question in your own words */
+@Composable
+private fun TextDialog(title: String, context: String, label: String, onDismiss: () -> Unit, onSend: (String) -> Unit) {
+    var text by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(context, style = MaterialTheme.typography.bodyMedium, color = Muted, maxLines = 6)
+                androidx.compose.material3.OutlinedTextField(text, { text = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(enabled = text.isNotBlank(), onClick = { onSend(text.trim()) }) { Text("Send") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** a message to an agent on the bus (or "all") */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun MessageDialog(names: List<String>, onDismiss: () -> Unit, onSend: (String, String) -> Unit) {
+    var to by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(names.first()) }
+    var text by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Message") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    names.forEach { n ->
+                        androidx.compose.material3.FilterChip(selected = to == n, onClick = { to = n }, label = { Text(n, maxLines = 1) })
+                    }
+                }
+                androidx.compose.material3.OutlinedTextField(text, { text = it }, label = { Text("To $to") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(enabled = text.isNotBlank(), onClick = { onSend(to, text.trim()) }) { Text("Send") } },
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

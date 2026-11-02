@@ -28,6 +28,22 @@ class RemoteCommandTest {
         assertEquals("-l", out.lines().last { it.isNotBlank() })
     }
 
+    @Test fun orchFromLocalBinElseAuto() {
+        // orch only in ~/.local/bin (not on a non-login PATH): found there and exec'd
+        val home = createTempDir()
+        File(home, ".local/bin").mkdirs()
+        File(home, ".local/bin/orch").apply { writeText("#!/bin/sh\necho orch-tui \"$@\"\n"); setExecutable(true) }
+        val cmd = Host(id = "x", name = "dev", host = "h", user = "u", session = Host.ORCH).remoteCommand()!!
+        assertEquals("orch-tui", run(cmd, "/usr/bin:/bin", home.absolutePath).trim())
+        // without orch: falls back like Auto (here: no herdr/tmux either, so the plain shell)
+        File(home, ".local/bin/orch").delete()
+        val dir = createTempDir()
+        java.nio.file.Files.createSymbolicLink(File(dir, "sh").toPath(), File("/bin/sh").toPath())
+        val out = run(cmd, dir.absolutePath, home.absolutePath)
+        assertTrue(out, out.contains("no herdr or tmux here"))
+        home.deleteRecursively(); dir.deleteRecursively()
+    }
+
     @Test fun tmuxGetsTheSessionArguments() {
         val dir = createTempDir()
         File(dir, "tmux").apply { writeText("#!/bin/sh\nfor a in \"\$@\"; do echo \"[\$a]\"; done\n"); setExecutable(true) }

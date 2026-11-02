@@ -14,7 +14,7 @@ import app.kabuk.term.SshTab
 import app.kabuk.term.TabManager
 
 /**
- * Turns herdr agent status changes into notifications:
+ * Turns agent status changes (herdr or orchtool) and orchtool questions into notifications:
  * an agent starts waiting for you → "needs you" (loud); working → idle → "finished" (quiet, optional).
  */
 object AgentNotifier {
@@ -60,10 +60,47 @@ object AgentNotifier {
                     nm.notify(id, build(tab, a, DONE, "${a.name} finished · ${a.place}", "Ready for the next prompt on ${tab.hostName}"))
             }
         }
-        // agents that disappeared
+        // questions on the orchtool bus: one notification each, with the agent's options as buttons
+        for (q in tab.busQuestions.value) {
+            val key = "${tab.id}/q${q.id}"
+            seen += key
+            last[key] = "ask"
+            if (notified[key] == null && !(TabManager.foreground && TabManager.agentsOpen)) {
+                notified[key] = "q${q.id}"
+                nm.notify(key.hashCode(), buildQuestion(tab, q, key))
+            }
+        }
+        // agents and questions that disappeared
         last.keys.filter { it.startsWith("${tab.id}/") && it !in seen }.forEach {
             last.remove(it); notified.remove(it); nm.cancel(it.hashCode())
         }
+    }
+
+    private fun buildQuestion(tab: SshTab, q: BusQuestion, key: String): Notification {
+        val open = Intent(ctx, MainActivity::class.java)
+            .setAction(MainActivity.ACTION_OPEN_AGENT)
+            .putExtra("tab", tab.id).putExtra("agents", true)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(ctx, key.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val b = Notification.Builder(ctx, NEEDS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("${q.from} asks you")
+            .setContentText(q.text)
+            .setStyle(Notification.BigTextStyle().bigText(q.text))
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_REMINDER)
+        // Android 8-11 can't require unlocking for a button: there only tapping (opens the app) answers
+        if (android.os.Build.VERSION.SDK_INT >= 31) q.options.take(3).forEachIndexed { i, opt ->
+            val identity = Uri.parse("kabuk://ask/${tab.id}/${q.id}/$i")
+            val bi = PendingIntent.getBroadcast(ctx, identity.hashCode(),
+                Intent(ctx, AnswerReceiver::class.java).setData(identity)
+                    .putExtra("tab", tab.id).putExtra("question", q.id).putExtra("label", opt).putExtra("agent", key),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val label = if (opt.length > 20) opt.take(19).trimEnd() + "…" else opt
+            b.addAction(Notification.Action.Builder(null, label, bi).setAuthenticationRequired(true).build())
+        }
+        return b.build()
     }
 
     private fun build(tab: SshTab, a: Agent, channel: String, title: String, text: String, q: app.kabuk.text.Pending? = null): Notification {

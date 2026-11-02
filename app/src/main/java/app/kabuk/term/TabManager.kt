@@ -64,6 +64,8 @@ object TabManager {
     @Volatile var foreground = false
     /** the terminal itself is on screen (not settings, server list, copy text) */
     @Volatile var terminalVisible = false
+    /** the agents sheet is open (its questions are on screen: no notification for them) */
+    @Volatile var agentsOpen = false
     private var nextId = 1L
     private val logScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val logJobs = HashMap<Long, Job>()

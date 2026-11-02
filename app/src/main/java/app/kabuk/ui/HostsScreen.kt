@@ -121,6 +121,7 @@ fun HostsScreen(onConnected: () -> Unit, onEdit: (String?) -> Unit, onSettings: 
                             h.label + when (h.session) {
                                 Host.TMUX -> " · tmux ${h.tmuxSession}"
                                 Host.AUTO -> " · herdr/tmux"
+                                Host.ORCH -> " · orch"
                                 else -> ""
                             } + (if (h.keyInstalled) " · key" else ""),
                             style = MaterialTheme.typography.bodySmall, color = Muted, fontFamily = Mono,
@@ -237,7 +238,7 @@ fun HostEditScreen(id: String?, onDone: () -> Unit) {
 
             Text("Start with", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.material3.SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                val modes = listOf(Host.AUTO to "Auto", Host.TMUX to "tmux", Host.SHELL to "Plain shell")
+                val modes = listOf(Host.AUTO to "Auto", Host.ORCH to "orch", Host.TMUX to "tmux", Host.SHELL to "Shell")
                 modes.forEachIndexed { i, (m, label) ->
                     SegmentedButton(
                         selected = mode == m, onClick = { mode = m },
@@ -248,13 +249,14 @@ fun HostEditScreen(id: String?, onDone: () -> Unit) {
             Text(
                 when (mode) {
                     Host.AUTO -> "herdr if the server has it, else tmux, else a plain shell. Agents keep running when you close the app or lose signal."
+                    Host.ORCH -> "orchtool: its workspaces, and agents, questions and messages from its bus in Kabuk. Falls back to Auto if orch isn't installed."
                     Host.TMUX -> "Always tmux (plain shell if it isn't installed). You come back to the same screen."
                     else -> "No session that survives: closing the connection ends what runs in it."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = Muted,
             )
-            if (mode != Host.SHELL) OutlinedTextField(session, { session = it }, label = { Text("tmux session name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            else OutlinedTextField(startup, { startup = it }, label = { Text("Run after login (optional)") }, singleLine = true,
+            if (mode == Host.TMUX || mode == Host.AUTO) OutlinedTextField(session, { session = it }, label = { Text("tmux session name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            else if (mode == Host.SHELL) OutlinedTextField(startup, { startup = it }, label = { Text("Run after login (optional)") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth(), placeholder = { Text("e.g. claude") })
             SwitchRow("Reconnect automatically", reconnect, "After network changes or drop-outs.") { reconnect = it }
 

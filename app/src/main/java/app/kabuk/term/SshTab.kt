@@ -3,6 +3,8 @@ package app.kabuk.term
 import android.content.Context
 import app.kabuk.agents.Agent
 import app.kabuk.agents.Herdr
+import app.kabuk.agents.Orch
+import app.kabuk.log.KLog
 import app.kabuk.data.Host
 import app.kabuk.data.Hosts
 import app.kabuk.data.SecretBox
@@ -60,6 +62,11 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     val agents = MutableStateFlow<List<Agent>>(emptyList())
     /** the open question of each waiting agent, by pane id (from herdr's live updates) */
     val questions = MutableStateFlow<Map<String, app.kabuk.text.Pending>>(emptyMap())
+    /** orchtool backend: questions agents asked you on the bus, and the timeline (empty with herdr) */
+    val busQuestions = MutableStateFlow<List<app.kabuk.agents.BusQuestion>>(emptyList())
+    val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
+    /** agents come from orchtool instead of herdr (the server's "Start with" is orch) */
+    val usesOrch get() = host.session == Host.ORCH
     /** agents come live from herdr's event stream (false: asked every few seconds) */
     @Volatile var liveAgents = false
         private set
@@ -191,6 +198,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             runCatching { c.client.disconnect() }
             agents.value = emptyList()
             questions.value = emptyMap()
+            busQuestions.value = emptyList()
+            timeline.value = emptyList()
             TabManager.agentsChanged(this)
             if (closing) break
             val err = result.exceptionOrNull()
@@ -336,6 +345,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
 
     private fun watchAgents(c: Conn) {
         val active = { conn === c && !closing }
+        if (usesOrch) return watchOrch(c, active)
         // live: herdr's event stream through a small watcher on the server; changes arrive at once
         while (active()) {
             val end = runCatching {
@@ -363,6 +373,54 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         }
     }
 
+    /** orchtool: `orch watch` streams agents, dialogs, your questions and the timeline */
+    private fun watchOrch(c: Conn, active: () -> Boolean) {
+        var lastErr = ""
+        while (active()) {
+            KLog.i("AGENT", "orch watch start on ${host.name}")
+            val end = runCatching {
+                Orch.stream(c.client, active) { u ->
+                    if (!active()) return@stream
+                    liveAgents = u != null
+                    val err = if (u == null) "orchd not running" else ""
+                    if (err != lastErr) { KLog.i("AGENT", err.ifEmpty { "orch watch live" }); lastErr = err }
+                    agents.value = u?.agents ?: emptyList()
+                    questions.value = u?.screens ?: emptyMap()
+                    busQuestions.value = u?.questions ?: emptyList()
+                    timeline.value = u?.timeline ?: emptyList()
+                    TabManager.agentsChanged(this)
+                }
+            }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
+            liveAgents = false
+            KLog.i("AGENT", "orch watch ended: $end")
+            // orch not installed there: look again once a minute
+            try { Thread.sleep(if (end == Herdr.StreamEnd.UNAVAILABLE) 60_000 else 3_000) } catch (_: InterruptedException) { return }
+        }
+    }
+
+    /** answer a bus question (first answer wins); done(false) when it was answered elsewhere already or not sent */
+    fun answerQuestion(id: Long, text: String, done: (Boolean) -> Unit) {
+        val c = conn ?: return done(false)
+        synchronized(answered) {
+            if (!answered.add("q$id")) return done(false)
+        }
+        thread {
+            val ok = runCatching { Orch.answerQuestion(c.client, id, text) }.getOrDefault(false)
+            KLog.i("AGENT", "answer question #$id: ${if (ok) "won" else "not applied"}")
+            if (!ok) synchronized(answered) { answered.remove("q$id") }
+            TabManager.main.post { done(ok) }
+        }
+    }
+
+    /** a message from you to an agent on the orchtool bus */
+    fun sendBus(to: String, text: String, done: (Boolean) -> Unit) {
+        val c = conn ?: return done(false)
+        thread {
+            val ok = runCatching { Orch.send(c.client, to, text) }.getOrDefault(false)
+            TabManager.main.post { done(ok) }
+        }
+    }
+
     /** answer a waiting agent's question without bringing it on screen; false if the question changed meanwhile */
     fun answerAgent(paneId: String, choice: app.kabuk.text.Choice, expect: String, done: (Boolean) -> Unit) {
         val c = conn ?: return done(false)
@@ -372,7 +430,10 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             if (answered.size > 200) answered.remove(answered.first())
         }
         thread {
-            val ok = runCatching { Herdr.answer(c.client, paneId, choice.key, expect) }.getOrDefault(false)
+            val ok = runCatching {
+                if (usesOrch) Orch.answerScreen(c.client, paneId, choice.key, expect)
+                else Herdr.answer(c.client, paneId, choice.key, expect)
+            }.getOrDefault(false)
             // not sent (question changed, connection down): this question may be answered again
             if (!ok) synchronized(answered) { answered.remove("$paneId\u0000$expect") }
             TabManager.main.post { done(ok) }
@@ -385,7 +446,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         val c = conn ?: return done("Not connected")
         thread {
             val err = try {
-                if (Herdr.startAgent(c.client, dir, tool)) null else "Couldn't start $tool"
+                val started = if (usesOrch) Orch.startAgent(c.client, dir, tool) else Herdr.startAgent(c.client, dir, tool)
+                if (started) null else "Couldn't start $tool"
             } catch (e: java.io.FileNotFoundException) {
                 "There is no folder $dir on ${host.name}"
             } catch (e: Exception) {
@@ -398,7 +460,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     fun focusAgent(a: Agent, done: (Boolean) -> Unit) {
         val c = conn ?: return done(false)
         thread {
-            val ok = runCatching { Herdr.focus(c.client, a) }.getOrDefault(false)
+            val ok = runCatching { if (usesOrch) Orch.focus(c.client, a) else Herdr.focus(c.client, a) }.getOrDefault(false)
             TabManager.main.post { done(ok) }
         }
     }
@@ -407,13 +469,17 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     override fun captureHistory(done: (String, String) -> Unit) {
         val c = conn ?: return super.captureHistory(done)
         thread {
-            val herdr = runCatching { Herdr.readFocused(c.client) }.getOrNull()?.takeIf { it.second.isNotBlank() }
+            val herdr = runCatching {
+                if (usesOrch) agents.value.firstOrNull { it.focused && it.paneId.isNotEmpty() }
+                    ?.let { a -> Orch.read(c.client, a.paneId)?.let { "orch · ${a.place}" to it } }
+                else Herdr.readFocused(c.client)?.let { "herdr · ${it.first}" to it.second }
+            }.getOrNull()?.takeIf { it.second.isNotBlank() }
             val tmux = if (herdr == null && host.session != Host.SHELL) runCatching {
                 exec(c.client, "tmux capture-pane -p -J -S -20000 -t ${shellQuote(host.tmuxSession)}").second
             }.getOrNull()?.takeIf { it.isNotBlank() } else null
             TabManager.main.post {
                 when {
-                    herdr != null -> done(herdr.second.trimEnd() + "\n", "herdr · ${herdr.first}")
+                    herdr != null -> done(herdr.second.trimEnd() + "\n", herdr.first)
                     tmux != null -> done(tmux.trimEnd() + "\n", "tmux · ${host.tmuxSession}")
                     else -> super.captureHistory(done)
                 }

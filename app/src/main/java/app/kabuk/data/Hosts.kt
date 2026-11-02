@@ -17,7 +17,8 @@ data class Host(
     val passwordEnc: String = "",
     /**
      * What keeps programs running when the connection drops: [AUTO] = herdr if the server has it, else tmux,
-     * else a plain shell; [TMUX]; [SHELL] = nothing (plain login shell or [startupCommand]).
+     * else a plain shell; [ORCH] = orchtool's TUI (agents, questions and timeline from orchtool's bus);
+     * [TMUX]; [SHELL] = nothing (plain login shell or [startupCommand]).
      */
     val session: String = AUTO,
     val tmuxSession: String = "main",
@@ -40,7 +41,11 @@ data class Host(
         val shell = "printf '\\033[2m[kabuk] no herdr or tmux here: plain shell, it ends when the connection drops]\\033[0m\\r\\n'; " +
             "exec \"\${SHELL:-/bin/sh}\" -l"
         // wrapped in sh so it works whatever the login shell is (bash, zsh, fish)
+        // orchtool's TUI (its daemon keeps the agents running); without orch on the server: like Auto
+        val orch = "O=\$(command -v orch || { [ -x \"\$HOME/.local/bin/orch\" ] && echo \"\$HOME/.local/bin/orch\"; }); " +
+            "[ -n \"\$O\" ] && exec \"\$O\"; "
         return when (session) {
+            ORCH -> "sh -c " + shellQuote(orch + herdr + tmux + shell)
             AUTO -> "sh -c " + shellQuote(herdr + tmux + shell)
             TMUX -> "sh -c " + shellQuote(tmux + shell)
             else -> startupCommand.ifBlank { null }
@@ -58,6 +63,7 @@ data class Host(
         const val AUTO = "auto"
         const val TMUX = "tmux"
         const val SHELL = "shell"
+        const val ORCH = "orch"
 
         fun fromJson(o: JSONObject) = Host(
             id = o.getString("id"), name = o.getString("name"), host = o.getString("host"),
