@@ -9,6 +9,7 @@ import java.security.Security
 class KabukApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        app.kabuk.log.KLog.init(this)   // first: logs the start line and catches crashes from here on
         // Android ships a cut-down "BC" provider; sshj needs the full one (Ed25519, curve25519, ...).
         Security.removeProvider("BC")
         Security.insertProviderAt(BouncyCastleProvider(), 1)

@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Follow the Kabuk phone log on the DevBox, like `tail -f` (receiver: scripts/logsink/logsink.py, port 8792).
+
+  scripts/livelog                    # last 100 lines, then follow
+  scripts/livelog -n 500 --once      # print and exit
+  scripts/livelog --grep 'SSH|CRASH'
+  scripts/livelog --device Pixel_8   # one device (file <device>.log)
+
+Lines are JSON records {"t": ms, "l": level, "tag": tag, "msg": text}; crashes carry "stack". Dir: $LOGSINK_DIR or debug/.
+"""
+import argparse, glob, json, os, re, sys, time
+
+ap = argparse.ArgumentParser(description="Follow the Kabuk live log")
+ap.add_argument("-n", type=int, default=100, help="lines to show first (default 100)")
+ap.add_argument("--once", action="store_true", help="print and exit")
+ap.add_argument("--grep", help="only lines matching this regex (on the formatted line)")
+ap.add_argument("--device", help="only this device")
+ap.add_argument("--raw", action="store_true", help="print the stored JSON unchanged")
+a = ap.parse_args()
+
+root = os.environ.get("LOGSINK_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "debug")
+rx = re.compile(a.grep) if a.grep else None
+
+
+def fmt(device, line):
+    if a.raw:
+        return f"{device}: {line}"
+    try:
+        r = json.loads(line)
+    except ValueError:
+        return f"{device}: {line}"
+    if "sink" in r:
+        return f"{device}: --- {r['sink']} {r.get('count', '')} ---"
+    ts = time.strftime("%H:%M:%S", time.localtime(r.get("t", 0) / 1000))
+    out = f"{device}: {ts} {r.get('l', '')} {r.get('tag', '')} {r.get('msg', '')}"
+    if r.get("stack"):
+        out += "\n" + r["stack"]
+    return out
+
+
+def show(device, line):
+    out = fmt(device, line.rstrip("\n"))
+    if not rx or rx.search(out):
+        print(out, flush=True)
+
+
+files = sorted(glob.glob(os.path.join(root, f"{a.device or '*'}.log")))
+if not files:
+    sys.exit(f"no logs yet in {os.path.abspath(root)}")
+handles = {}
+for path in files:
+    device = os.path.basename(path)[:-4]
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f.readlines()[-a.n:]:
+            show(device, line)
+    if not a.once:
+        h = open(path, encoding="utf-8", errors="replace")
+        h.seek(0, os.SEEK_END)
+        handles[path] = (device, h, os.stat(path).st_ino)
+while not a.once:
+    time.sleep(1)
+    for path, (device, h, ino) in list(handles.items()):
+        if os.path.exists(path) and os.stat(path).st_ino != ino:  # rotated
+            h.close()
+            h = open(path, encoding="utf-8", errors="replace")
+            handles[path] = (device, h, os.stat(path).st_ino)
+        for line in h.readlines():
+            show(device, line)

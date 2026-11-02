@@ -1,0 +1,28 @@
+# Live-log receiver for the Kabuk Android app (source: scripts/logsink/logsink.py).
+# The phone POSTs HMAC-signed JSON log lines to 192.168.178.11:8792; they land in /projects/kabuk/debug/<device>.log
+# (read with scripts/livelog). Token: /docker/kabuk-logsink/.env (LOGSINK_TOKEN); the app gets the same value at build
+# time from ~/.gradle/gradle.properties (kabuk.logsinkToken). Start: docker compose -f scripts/logsink/docker-compose.yml up -d
+services:
+  kabuk-logsink:
+    image: python:3.13-alpine
+    container_name: kabuk-logsink
+    command: python /app/logsink.py
+    volumes:
+      - /projects/kabuk/scripts/logsink/logsink.py:/app/logsink.py:ro
+      - /projects/kabuk/debug:/debug
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      TZ: Europe/Berlin
+      LOGSINK_DIR: /debug
+      LOGSINK_BIND: 0.0.0.0
+      LOGSINK_PORT: "8792"
+    env_file: /docker/kabuk-logsink/.env
+    user: "1000:1000"
+    ports:
+      - "192.168.178.11:8792:8792"   # LAN/WireGuard only, not from the internet
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8792/health', timeout=3).read()"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

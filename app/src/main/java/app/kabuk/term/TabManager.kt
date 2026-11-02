@@ -15,8 +15,14 @@ import app.kabuk.agents.AgentNotifier
 import app.kabuk.data.Host
 import app.kabuk.data.Hosts
 import app.kabuk.data.Settings
+import app.kabuk.log.KLog
 import app.kabuk.service.SessionService
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +65,8 @@ object TabManager {
     /** the terminal itself is on screen (not settings, server list, copy text) */
     @Volatile var terminalVisible = false
     private var nextId = 1L
+    private val logScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val logJobs = HashMap<Long, Job>()
     private var lastNetwork: Network? = null
 
     fun init(ctx: Context) {
@@ -68,6 +76,7 @@ object TabManager {
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val changed = lastNetwork != null && lastNetwork != network
+                KLog.i("NET", if (changed) "default network changed" else "network available")
                 lastNetwork = network
                 main.post {
                     _tabs.value.filterIsInstance<SshTab>().forEach {
@@ -84,6 +93,7 @@ object TabManager {
     fun openLocal(): TermTab = add(LocalTab(nextId++, app))
 
     internal fun add(t: TermTab): TermTab {
+        if (t is SshTab) logStatus(t)
         _tabs.update { it + t }
         select(t.id)
         tabsChanged()
@@ -95,10 +105,28 @@ object TabManager {
         _tabs.value.firstOrNull { it.id == id }?.unread?.value = false
     }
 
+    /** live log: every connection state change of an SSH tab (host names only, no secrets) */
+    private fun logStatus(t: SshTab) {
+        val name = Hosts.get(t.hostId)?.name ?: "host"
+        val job = logScope.launch {
+            t.status.collect { s ->
+                when (s) {
+                    is Status.Connecting -> KLog.i("SSH", "$name: ${s.what}")
+                    is Status.Connected -> KLog.i("SSH", "$name: connected")
+                    is Status.Disconnected -> KLog.w("SSH", "$name: disconnected (${s.reason})" + (s.retryAt?.let { ", retry in ${(it - System.currentTimeMillis()) / 1000}s" } ?: ", waiting for the user"))
+                    is Status.Ended -> KLog.i("SSH", "$name: ${s.reason}")
+                }
+            }
+        }
+        logJobs[t.id] = job
+    }
+
     fun close(t: TermTab) {
         val list = _tabs.value
         val i = list.indexOf(t)
         if (i < 0) return
+        logJobs.remove(t.id)?.cancel()
+        if (t is SshTab) KLog.i("SSH", "tab closed (${Hosts.get(t.hostId)?.name ?: "host"})")
         t.close()
         val rest = list - t
         _tabs.value = rest
