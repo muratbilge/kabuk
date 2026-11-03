@@ -188,6 +188,7 @@ object AgentNotifier {
             .setContentText(when (outcome) {
                 AnswerOutcome.SENT -> "The agent got your answer."
                 AnswerOutcome.ALREADY -> "Waiting for the agent to take it."
+                AnswerOutcome.UNSURE -> "No reply from orch. Open Kabuk and check the agent."
                 else -> "Open Kabuk to see what it asks now."
             })
             .setOnlyAlertOnce(true)

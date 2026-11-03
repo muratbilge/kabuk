@@ -9,9 +9,21 @@ enum class AnswerOutcome(val text: String) {
     ALREADY("Already answered from this phone"),
     /** the dialog changed meanwhile, or another client answered it first */
     CHANGED("Not sent: the question changed"),
-    /** a bus question that was answered already (by Telegram, the TUI, …) */
+    /** a bus question or dialog that was answered already (the TUI, the CLI, …) */
     TAKEN("Not sent: already answered"),
     OFFLINE("Not sent: not connected"),
+    /** the agent's pane has exited, or orchd doesn't know it (or that question) */
+    GONE("Not sent: that agent is gone"),
+    /** the program in the pane isn't reading its input right now */
+    STUCK("Not sent: the agent isn't taking input"),
+    /** orchd isn't running on the server, or orch isn't installed there */
+    DAEMON("Not sent: orchd isn't running"),
+    /** the phone and the server's orch disagree about the commands (one of them is too old) */
+    MISMATCH("Not sent: Kabuk and orch disagree, update one of them"),
+    /** orch gave no reply in time, twice: the answer may or may not have landed */
+    UNSURE("Unsure: no reply from orch, check the agent"),
+    /** orch failed for a reason it didn't name */
+    FAILED("Not sent: orch failed"),
 }
 
 /**

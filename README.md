@@ -6,6 +6,13 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.3 — honest contract with orchtool.** Every answer reports what orch said (exit-code table in orchtool's
+  `notes/kabuk-contract-v2.md`): the screen changed, answered already, the agent is gone or not taking input,
+  orchd not running, or Kabuk and orch disagree (update one of them). No reply in time → one retry (orchd answers
+  each screen once, so a landed first try is recognised), then "Unsure". The watch line's `v` is checked: a newer
+  orch shows "update Kabuk" in the agents sheet. Reply chips on an orch server answer the dialog's own pane
+  through `orch send --expect`, never whatever pane the TUI shows. A malformed watch line is logged without its
+  text. Test: `OrchContractTest` (shared fixture `orch-watch-v1.json`, the exit codes through a real `sh`).
 - **Start with: orch.** The server's orchtool TUI runs in the tab; agents, their dialogs, the questions they ask
   you (`ask_human`) and the message timeline come live from `orch watch --json`. The agents sheet shows "Asks you"
   with the agent's options and Reply…, and Comms with Message… to one agent or all. A dialog is answered with

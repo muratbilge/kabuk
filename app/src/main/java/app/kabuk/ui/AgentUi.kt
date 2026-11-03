@@ -94,6 +94,7 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
     var newAgent by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val asks = remember(v) { TabManager.sshTabs().flatMap { t -> t.busQuestions.value.map { t to it } } }
     val comms = remember(v) { TabManager.sshTabs().filter { it.usesOrch } }
+    val note = remember(v) { TabManager.sshTabs().firstNotNullOfOrNull { it.orchNote.value } }
     // free-text answer to a bus question / a message to an agent
     var replyTo by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Pair<SshTab, app.kabuk.agents.BusQuestion>?>(null) }
     var messageOn by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<SshTab?>(null) }
@@ -114,6 +115,10 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                         Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("New agent")
                     }
                 }
+            }
+            if (note != null) item {
+                Text(note, style = MaterialTheme.typography.bodySmall, color = Warn,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
             }
             if (asks.isNotEmpty()) {
                 item {
@@ -239,7 +244,8 @@ private fun AgentRow(
             )
             // answered from this phone, but the dialog is still on screen: no buttons, say so instead
             if (answered != null) Text(
-                "Answered ${answered}${q.choices.firstOrNull { it.key == answered }?.let { " · ${it.label}" } ?: ""} from this phone · waiting for the agent",
+                "Answered ${if (answered == app.kabuk.agents.Orch.ESC) "Esc" else answered}" +
+                    "${q.choices.firstOrNull { it.key == answered }?.let { " · ${it.label}" } ?: ""} from this phone · waiting for the agent",
                 style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2,
                 modifier = Modifier.padding(start = 24.dp, top = 8.dp),
             )

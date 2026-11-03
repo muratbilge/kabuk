@@ -93,19 +93,41 @@ class TerminalUi(val view: TerminalCanvasView, val mods: ModifierState) {
     /** height the terminal screen really has (the keyboard already taken off) */
     var available by mutableStateOf(800.dp)
 
+    /**
+     * The dialog the reply chips belong to when they came from orch's stream: (tab, pane, fingerprint).
+     * null = the chips were read off this screen and a tap types into the terminal.
+     */
+    var chipDialog: Triple<SshTab, String, String>? = null
+
     /** a reply chip (null = Esc) was tapped */
     fun answer(c: app.kabuk.text.Choice?) {
         val t = target ?: return
         view.scrollToBottom()
+        val sent = if (c == null) "Sent Esc" else "Sent ${c.key} · ${c.label}"
+        // "No, and tell Claude what to do differently": straight into writing that
+        val tell = c != null && c.label.startsWith("No", ignoreCase = true) && c.label.contains("tell", ignoreCase = true)
+        fun tellIt() { promptHint = "Tell it what to do instead…"; showPrompt = true; focusPrompt++ }
+        val d = chipDialog
+        if (d != null && t === d.first) {
+            // orch host: the answer goes to the dialog's own pane through orchd (checked against the screen,
+            // once), never into whatever pane the TUI shows right now, which isn't always that agent
+            val (tab, pane, fp) = d
+            replied()
+            tab.answerAgent(pane, c ?: app.kabuk.text.Choice(app.kabuk.agents.Orch.ESC, "Esc", false), fp) { r ->
+                if (r != app.kabuk.agents.AnswerOutcome.SENT) return@answerAgent TabManager.toast(r.text)
+                TabManager.toast(sent)
+                // the reason must reach that agent: open the message box only once it is on screen
+                if (tell) {
+                    val a = tab.agents.value.firstOrNull { it.paneId == pane } ?: return@answerAgent tellIt()
+                    tab.focusAgent(a) { ok -> if (ok) tellIt() else TabManager.toast("Couldn't switch to ${a.place}") }
+                }
+            }
+            return
+        }
         t.write(c?.key ?: "\u001b")
         replied()
-        TabManager.toast(if (c == null) "Sent Esc" else "Sent ${c.key} · ${c.label}")
-        // "No, and tell Claude what to do differently": straight into writing that
-        if (c != null && c.label.startsWith("No", ignoreCase = true) && c.label.contains("tell", ignoreCase = true)) {
-            promptHint = "Tell it what to do instead…"
-            showPrompt = true
-            focusPrompt++
-        }
+        TabManager.toast(sent)
+        if (tell) tellIt()
     }
 
     /** one draft per tab, so text typed for one agent can't be sent to another */
@@ -145,17 +167,21 @@ fun TerminalScreen(
             val now = android.os.SystemClock.uptimeMillis()
             // the bar showing up shrinks the terminal and the agent redraws: half-drawn or reflowed screens
             // must not make it vanish again, so it stays until the question is really gone
-            // herdr's own view of the agent on screen first (exact, from the event stream), else read the screen
-            val herdrQ = (tab as? SshTab)?.let { t ->
-                t.agents.value.firstOrNull { it.focused && it.needsYou }?.let { t.questions.value[it.paneId] }
+            // the stream's view of the agent on screen first (exact, from herdr or orch), else read the screen
+            val streamQ = (tab as? SshTab)?.let { t ->
+                t.agents.value.firstOrNull { it.focused && it.needsYou }?.let { a -> t.questions.value[a.paneId]?.let { q -> Triple(t, a.paneId, q) } }
             }
             val found = if (tab?.canSend == true && !tab.redrawing && now - ui.repliedAt > 1200)
-                herdrQ?.choices ?: app.kabuk.text.QuickReplies.find(ui.view.focusedPaneLines()) else emptyList()
+                streamQ?.third?.choices ?: app.kabuk.text.QuickReplies.find(ui.view.focusedPaneLines()) else emptyList()
             if (found.isNotEmpty()) {
                 ui.choices = found; lastSeen = now
+                // on an orch host the chips answer that dialog's pane through orchd (see TerminalUi.answer)
+                ui.chipDialog = streamQ?.takeIf { it.first.usesOrch }?.let { Triple(it.first, it.second, it.third.fingerprint) }
             } else if (ui.choices.isNotEmpty()) {
                 val waiting = (tab as? SshTab)?.agents?.value?.any { it.focused && it.needsYou } == true
-                if (tab?.canSend != true || now - ui.repliedAt <= 1200 || (!waiting && now - lastSeen > 1500)) ui.choices = emptyList()
+                if (tab?.canSend != true || now - ui.repliedAt <= 1200 || (!waiting && now - lastSeen > 1500)) {
+                    ui.choices = emptyList(); ui.chipDialog = null
+                }
             }
             kotlinx.coroutines.delay(350)
         }

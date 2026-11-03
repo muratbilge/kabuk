@@ -66,6 +66,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     /** orchtool backend: questions agents asked you on the bus, and the timeline (empty with herdr) */
     val busQuestions = MutableStateFlow<List<app.kabuk.agents.BusQuestion>>(emptyList())
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
+    /** orchtool: the server's orch streams a newer format than this app understands (shown in the agents sheet) */
+    val orchNote = MutableStateFlow<String?>(null)
     /** agents come from orchtool instead of herdr (the server's "Start with" is orch) */
     val usesOrch get() = host.session == Host.ORCH
 
@@ -379,7 +381,12 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                 Orch.stream(c.client, active) { u ->
                     if (!active()) return@stream
                     val err = if (u == null) "orchd not running" else ""
-                    if (err != lastErr) { KLog.i("AGENT", err.ifEmpty { "orch watch live" }); lastErr = err }
+                    if (err != lastErr) { KLog.i("AGENT", err.ifEmpty { "orch watch live (orch ${u!!.orch.ifEmpty { "<0.1.1" }}, v${u.v})" }); lastErr = err }
+                    // a newer line format: what we can't parse falls back to defaults; tell the user to update
+                    if (u != null && u.v > Orch.V && orchNote.value == null) {
+                        KLog.w("AGENT", "orch watch v${u.v} is newer than Kabuk (v${Orch.V}): update Kabuk")
+                        orchNote.value = "orch on ${host.name} is newer than this Kabuk (watch v${u.v}, Kabuk v${Orch.V}): update Kabuk"
+                    }
                     agents.value = u?.agents ?: emptyList()
                     showQuestions(u?.screens ?: emptyMap())
                     busQuestions.value = u?.questions ?: emptyList()
@@ -394,6 +401,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             showQuestions(emptyMap())
             busQuestions.value = emptyList()
             timeline.value = emptyList()
+            orchNote.value = null
             TabManager.agentsChanged(this)
             // orch not installed there: look again once a minute
             try { Thread.sleep(if (end == Herdr.StreamEnd.UNAVAILABLE) 60_000 else 3_000) } catch (_: InterruptedException) { return }
@@ -406,10 +414,11 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         val key = ledger.questionKey(id)
         if (!ledger.claim(key, text)) { KLog.i("AGENT", "answer question #$id: already sent from this phone"); return done(AnswerOutcome.ALREADY) }
         thread {
-            val ok = runCatching { Orch.answerQuestion(c.client, id, text) }.getOrDefault(false)
-            KLog.i("AGENT", "answer question #$id: ${if (ok) "won" else "not applied"}")
-            if (!ok) ledger.release(key)
-            TabManager.main.post { done(if (ok) AnswerOutcome.SENT else AnswerOutcome.TAKEN) }
+            val r = runCatching { Orch.answerQuestion(c.client, id, text) }
+                .getOrElse { Orch.Answered(AnswerOutcome.FAILED, "error: ${it.reason()}") }
+            KLog.i("AGENT", "answer question #$id: ${r.why}")
+            if (r.outcome != AnswerOutcome.SENT) ledger.release(key)
+            TabManager.main.post { done(r.outcome) }
         }
     }
 
@@ -430,15 +439,16 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         if (!ledger.claim(key, choice.key)) { KLog.i("AGENT", "answer $paneId ${choice.key}: already sent from this phone"); return done(AnswerOutcome.ALREADY) }
         TabManager.agentsChanged(this)   // the inbox shows the dialog as answered from here on
         thread {
-            // null = sent, else why not (only the pane and the key are logged, never the dialog's text)
-            val why = runCatching {
+            // only the pane and the key are logged, never the dialog's text
+            val r = runCatching {
                 if (usesOrch) Orch.answerScreen(c.client, paneId, choice.key, expect)
                 else Herdr.answer(c.client, paneId, choice.key, expect)
-            }.getOrElse { "error: ${(it.message ?: it.javaClass.simpleName).lineSequence().first().take(80)}" }
-            KLog.i("AGENT", "answer $paneId ${choice.key}: ${why ?: "sent"}")
-            // not sent (dialog changed, connection down): this dialog may be answered again
-            if (why != null) { ledger.release(key); TabManager.agentsChanged(this) }
-            TabManager.main.post { done(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED) }
+                    .let { why -> Orch.Answered(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED, why ?: "sent") }
+            }.getOrElse { Orch.Answered(AnswerOutcome.FAILED, "error: ${it.reason()}") }
+            KLog.i("AGENT", "answer $paneId ${if (choice.key == Orch.ESC) "Esc" else choice.key}: ${r.why}")
+            // not sent (dialog changed, connection down, no reply): this dialog may be answered again
+            if (r.outcome != AnswerOutcome.SENT) { ledger.release(key); TabManager.agentsChanged(this) }
+            TabManager.main.post { done(r.outcome) }
         }
     }
 

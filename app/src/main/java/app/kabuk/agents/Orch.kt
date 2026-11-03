@@ -20,8 +20,10 @@ data class BusMessage(val id: Long, val tsMs: Long, val from: String, val to: St
  * timeline come live from `orch watch --json`; actions are single `orch` commands.
  */
 object Orch {
-    /** a non-login SSH shell often lacks ~/.local/bin; agents started from here need it too */
+    /** the `orch watch` line format this app understands (`"v"` in every line; orchtool/notes/kabuk-contract-v2.md) */
+    const val V = 1
     private const val HEARTBEAT_DEADLINE_MS = 150_000L
+    /** a non-login SSH shell often lacks ~/.local/bin; agents started from here need it too (exit 3 = no orch) */
     private const val FIND = "export PATH=\"\$HOME/.local/bin:\$PATH\"; O=\$(command -v orch) || exit 3; "
 
     class Update(
@@ -30,7 +32,31 @@ object Orch {
         val questions: List<BusQuestion>,
         val timeline: List<BusMessage>,
         val human: String,
+        /** the line's format version and the server's orch version ("" before orchtool 0.1.1) */
+        val v: Int = V,
+        val orch: String = "",
     )
+
+    /** what came of an `orch` command, and why, in words safe to log (never the dialog's text) */
+    class Answered(val outcome: AnswerOutcome, val why: String)
+
+    /**
+     * What an `orch` exit status means (orchtool's exit-code table, kabuk-contract-v2.md): 0 sent, 10 the screen
+     * changed, 11 answered already, 12 the pane exited, 13 the program isn't reading input, 14 no such pane or
+     * question, 20 orchd unreachable, 2 the CLI didn't understand us, 3 our own wrapper found no orch. An orch
+     * older than the table exits 1 for everything, which is FAILED: honest, since it didn't say.
+     */
+    fun outcomeOf(exit: Int?): AnswerOutcome = when (exit) {
+        0 -> AnswerOutcome.SENT
+        10 -> AnswerOutcome.CHANGED
+        11 -> AnswerOutcome.TAKEN
+        12, 14 -> AnswerOutcome.GONE
+        13 -> AnswerOutcome.STUCK
+        20, 3 -> AnswerOutcome.DAEMON
+        2 -> AnswerOutcome.MISMATCH
+        null -> AnswerOutcome.UNSURE
+        else -> AnswerOutcome.FAILED
+    }
 
     /** a watch line → update; null for an error line (orchd not running right now) */
     fun parseUpdate(line: String): Update? {
@@ -67,7 +93,7 @@ object Orch {
             BusMessage(m.getLong("id"), m.optLong("ts_ms"), m.optString("from"), m.optString("to"),
                 m.optString("kind"), m.optString("text"))
         }
-        return Update(agents, screens, questions, timeline, o.optString("human", "murat"))
+        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"))
     }
 
     /** runs `orch watch` until the connection ends or [active] turns false; UNAVAILABLE when orch isn't installed */
@@ -98,8 +124,10 @@ object Orch {
                 lastLine.set(System.currentTimeMillis())
                 if (line.isBlank()) continue
                 any = true
+                // only the exception's class: on Android a JSONException's message quotes the whole input
+                // line, which holds dialog and question text that must never reach the log
                 val u = runCatching { parseUpdate(line) }
-                    .onFailure { KLog.w("AGENT", "bad orch watch line (${line.length} chars)", it) }.getOrNull()
+                    .onFailure { KLog.w("AGENT", "bad orch watch line (${line.length} chars): ${it.javaClass.simpleName}") }.getOrNull()
                 onUpdate(u)
             }
             } finally { watchdog.interrupt() }
@@ -113,30 +141,63 @@ object Orch {
         }
     }
 
+    /** the Escape key as a choice (the reply chips' Esc): sent as a key press, not as text */
+    const val ESC = "\u001b"
+
+    /** the command that answers a dialog: orchd sends only if the screen still hashes to [hash] (testable as text) */
+    internal fun sendCommand(pane: String, key: String, hash: String): String =
+        FIND + "\"\$O\" send ${shellQuote(pane)} " + (if (key == ESC) "--key Escape" else shellQuote(key)) +
+            " --expect ${shellQuote(hash)} --lines 60"
+
     /**
-     * Answers a dialog on an agent's screen (approval menu). Rereads the pane first and only sends when the same
-     * question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one.
-     * Returns null when sent, else a short reason (safe to log: no screen text).
+     * Runs an `orch` command that is safe to repeat (orchd answers each screen state and each question once).
+     * No reply within the timeout → one retry: a first try that landed is then refused with 11 ("answered"),
+     * which counts as sent; a second silence is UNSURE. Returns the exit status, or null for that.
      */
-    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): String? {
-        val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
-        if (code != 0) return "read failed (exit $code)"
-        val hash = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
-            ?: return "no screen hash"
-        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return "no dialog on screen"
-        if (now.fingerprint != expect) return "dialog changed"
-        if (now.choices.none { it.key == key }) return "choice $key not offered"
-        // orchd sends only if the screen is still exactly what we read, and answers each screen once:
-        // a second phone/TUI answering the same dialog is refused instead of reaching the next one
-        val sent = SshTab.exec(
-            c, FIND + "\"\$O\" send ${shellQuote(pane)} ${shellQuote(key)} --expect ${shellQuote(hash)} --lines 60", timeoutS = 8,
-        ).first
-        return if (sent == 0) null else "refused by orchd (exit $sent: screen changed or answered already)"
+    private fun once(c: SSHClient, cmd: String): Pair<Int?, Boolean> {
+        for (attempt in 0..1) {
+            try {
+                return SshTab.exec(c, cmd, timeoutS = 8).first to (attempt == 1)
+            } catch (e: java.io.IOException) {
+                if (!e.message.orEmpty().contains("took longer")) throw e
+                if (attempt == 0) KLog.w("AGENT", "orch gave no reply in 8 s: trying once more")
+            }
+        }
+        return null to true
     }
 
-    /** answers a bus question; false when it was already answered (by Telegram, the TUI, …) or on failure */
-    fun answerQuestion(c: SSHClient, id: Long, text: String): Boolean =
-        SshTab.exec(c, FIND + "\"\$O\" answer --by kabuk --literal $id -- ${shellQuote(text)}", timeoutS = 8).first == 0
+    /**
+     * Answers a dialog on an agent's screen (approval menu). Rereads the pane first and only sends when the same
+     * question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one; orchd then
+     * sends only if the screen is still exactly what was read, and answers each screen once, so a second
+     * phone/TUI answering the same dialog is refused instead of reaching the next one.
+     */
+    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): Answered {
+        val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
+        if (code != 0) return Answered(if (code == null) AnswerOutcome.FAILED else outcomeOf(code), "read failed (exit $code)")
+        val hash = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
+            ?: return Answered(AnswerOutcome.FAILED, "no screen hash")
+        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
+        if (now.fingerprint != expect) return Answered(AnswerOutcome.CHANGED, "dialog changed")
+        if (key != ESC && now.choices.none { it.key == key }) return Answered(AnswerOutcome.CHANGED, "choice $key not offered")
+        val (sent, retried) = once(c, sendCommand(pane, key, hash))
+        return when {
+            sent == 0 -> Answered(AnswerOutcome.SENT, if (retried) "sent on the second try" else "sent")
+            sent == 11 && retried -> Answered(AnswerOutcome.SENT, "the first try landed (refused as answered on the retry)")
+            else -> Answered(outcomeOf(sent), "refused by orch (exit $sent)")
+        }
+    }
+
+    /** answers a bus question (first answer wins): TAKEN when it was answered already (the TUI, the CLI, …) */
+    fun answerQuestion(c: SSHClient, id: Long, text: String): Answered {
+        val (exit, retried) = once(c, FIND + "\"\$O\" answer --by kabuk --literal $id -- ${shellQuote(text)}")
+        return when {
+            exit == 0 -> Answered(AnswerOutcome.SENT, if (retried) "won on the second try" else "won")
+            exit == 11 && retried -> Answered(AnswerOutcome.SENT, "the first try won (refused as answered on the retry)")
+            exit == 11 -> Answered(AnswerOutcome.TAKEN, "answered already")
+            else -> Answered(outcomeOf(exit), "not applied (exit $exit)")
+        }
+    }
 
     /** a message from you to an agent (by its bus name, or "all") */
     fun send(c: SSHClient, to: String, text: String): Boolean =
