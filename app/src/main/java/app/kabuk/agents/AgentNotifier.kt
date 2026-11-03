@@ -177,19 +177,24 @@ object AgentNotifier {
      * arrived meanwhile (its notification must stay).
      */
     @Synchronized
-    fun answered(agentKey: String, fingerprint: String, text: String, ok: Boolean) {
+    fun answered(agentKey: String, fingerprint: String, text: String, outcome: AnswerOutcome) {
         if (notified[agentKey] != null && notified[agentKey] != fingerprint) return
         val notificationId = agentKey.hashCode()
         val nm = ctx.getSystemService(NotificationManager::class.java)
+        val fine = outcome == AnswerOutcome.SENT || outcome == AnswerOutcome.ALREADY
         val n = Notification.Builder(ctx, NEEDS)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (ok) "Sent $text" else "Not sent: the question changed")
-            .setContentText(if (ok) "The agent got your answer." else "Open Kabuk to see what it asks now.")
+            .setContentTitle(if (outcome == AnswerOutcome.SENT) "Sent $text" else outcome.text)
+            .setContentText(when (outcome) {
+                AnswerOutcome.SENT -> "The agent got your answer."
+                AnswerOutcome.ALREADY -> "Waiting for the agent to take it."
+                else -> "Open Kabuk to see what it asks now."
+            })
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(ctx, notificationId, Intent(ctx, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE))
-            .setTimeoutAfter(if (ok) 4_000 else 60_000)
+            .setTimeoutAfter(if (fine) 4_000 else 60_000)
             .build()
         nm.notify(notificationId, n)
     }

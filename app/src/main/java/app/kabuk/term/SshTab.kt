@@ -2,6 +2,7 @@ package app.kabuk.term
 
 import android.content.Context
 import app.kabuk.agents.Agent
+import app.kabuk.agents.AnswerOutcome
 import app.kabuk.agents.Herdr
 import app.kabuk.agents.Orch
 import app.kabuk.log.KLog
@@ -400,15 +401,15 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     }
 
     /** answer a bus question (first answer wins); done(false) when it was answered elsewhere already or not sent */
-    fun answerQuestion(id: Long, text: String, done: (Boolean) -> Unit) {
-        val c = conn ?: return done(false)
+    fun answerQuestion(id: Long, text: String, done: (AnswerOutcome) -> Unit) {
+        val c = conn ?: return done(AnswerOutcome.OFFLINE)
         val key = ledger.questionKey(id)
-        if (!ledger.claim(key)) { KLog.i("AGENT", "answer question #$id: already sent from this phone"); return done(false) }
+        if (!ledger.claim(key, text)) { KLog.i("AGENT", "answer question #$id: already sent from this phone"); return done(AnswerOutcome.ALREADY) }
         thread {
             val ok = runCatching { Orch.answerQuestion(c.client, id, text) }.getOrDefault(false)
             KLog.i("AGENT", "answer question #$id: ${if (ok) "won" else "not applied"}")
             if (!ok) ledger.release(key)
-            TabManager.main.post { done(ok) }
+            TabManager.main.post { done(if (ok) AnswerOutcome.SENT else AnswerOutcome.TAKEN) }
         }
     }
 
@@ -421,12 +422,13 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         }
     }
 
-    /** answer a waiting agent's question without bringing it on screen; false if the question changed meanwhile */
-    fun answerAgent(paneId: String, choice: app.kabuk.text.Choice, expect: String, done: (Boolean) -> Unit) {
-        val c = conn ?: return done(false)
+    /** answer a waiting agent's question without bringing it on screen; [done] gets what came of it */
+    fun answerAgent(paneId: String, choice: app.kabuk.text.Choice, expect: String, done: (AnswerOutcome) -> Unit) {
+        val c = conn ?: return done(AnswerOutcome.OFFLINE)
         // each dialog is answered once: a double tap (or notification + inbox) must not send twice
         val key = ledger.screenKey(paneId, expect)
-        if (!ledger.claim(key)) { KLog.i("AGENT", "answer $paneId ${choice.key}: already sent from this phone"); return done(false) }
+        if (!ledger.claim(key, choice.key)) { KLog.i("AGENT", "answer $paneId ${choice.key}: already sent from this phone"); return done(AnswerOutcome.ALREADY) }
+        TabManager.agentsChanged(this)   // the inbox shows the dialog as answered from here on
         thread {
             // null = sent, else why not (only the pane and the key are logged, never the dialog's text)
             val why = runCatching {
@@ -435,10 +437,13 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             }.getOrElse { "error: ${(it.message ?: it.javaClass.simpleName).lineSequence().first().take(80)}" }
             KLog.i("AGENT", "answer $paneId ${choice.key}: ${why ?: "sent"}")
             // not sent (dialog changed, connection down): this dialog may be answered again
-            if (why != null) ledger.release(key)
-            TabManager.main.post { done(why == null) }
+            if (why != null) { ledger.release(key); TabManager.agentsChanged(this) }
+            TabManager.main.post { done(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED) }
         }
     }
+
+    /** the choice this phone already sent for that dialog (which is still on screen), or null */
+    fun answeredWith(paneId: String, fingerprint: String): String? = ledger.what(ledger.screenKey(paneId, fingerprint))
 
     /** dialogs and questions answered from this phone; a dialog is forgotten once it left the screen */
     private val ledger = app.kabuk.agents.AnswerLedger()

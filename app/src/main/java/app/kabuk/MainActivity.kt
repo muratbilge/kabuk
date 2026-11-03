@@ -211,8 +211,8 @@ class MainActivity : ComponentActivity() {
                         if (agent != null) tab.focusAgent(agent) {}
                     } else {
                         val label = i.getStringExtra("label") ?: ""
-                        tab.answerAgent(pane, app.kabuk.text.Choice(reply, label, false), expect) { ok ->
-                            if (!ok) return@answerAgent TabManager.toast("Not sent: the question changed")
+                        tab.answerAgent(pane, app.kabuk.text.Choice(reply, label, false), expect) { outcome ->
+                            if (outcome != app.kabuk.agents.AnswerOutcome.SENT) return@answerAgent TabManager.toast(outcome.text)
                             TabManager.toast("Sent $reply · $label to ${agent.place}")
                             // "No, and tell it what to do": the reason must reach this agent, so only after switching to it
                             if (i.getBooleanExtra("tell", false)) tab.focusAgent(agent) { focused ->

@@ -47,6 +47,7 @@ object Orch {
                 cwd = a.optString("cwd"), workspace = a.optString("workspace"),
                 workspaceNumber = a.optInt("workspace_number"), focused = a.optBoolean("focused"),
                 bus = bus, statusText = if (a.isNull("status_text")) "" else a.optString("status_text"),
+                registered = a.optBoolean("registered", true),
             )
         }
         val screens = HashMap<String, Pending>()

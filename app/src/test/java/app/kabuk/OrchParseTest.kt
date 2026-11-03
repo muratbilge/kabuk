@@ -46,5 +46,17 @@ class OrchParseTest {
         assertEquals("", a.paneId)
         assertEquals("", a.statusText)
         assertEquals("w", a.place)
+        assertTrue("no flag = a bus agent", a.registered)
+    }
+
+    /** a pane orchd only detected (a codex without hooks): shown, but not a message recipient */
+    @Test fun unregisteredPaneAgent() {
+        val line = """{"v":1,"human":"murat","agents":[{"name":"codex-p3","kind":"codex","status":"working","status_text":null,""" +
+            """"pane":"orch:p3","cwd":"/w","workspace":"w","workspace_number":1,"focused":false,"seen_ms":null,"registered":false}],""" +
+            """"questions":[],"screens":{},"timeline":[]}"""
+        val a = Orch.parseUpdate(line)!!.agents.single()
+        assertEquals("orch:p3", a.paneId)
+        assertEquals(false, a.registered)
+        assertTrue(Orch.parseUpdate(res("orch-watch.json").trim())!!.agents.single().registered)
     }
 }

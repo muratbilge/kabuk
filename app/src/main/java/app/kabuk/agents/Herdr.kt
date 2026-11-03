@@ -19,6 +19,8 @@ data class Agent(
     val bus: String = "",
     /** what it last said about its status (orchtool) */
     val statusText: String = "",
+    /** known to the orchtool bus (messages reach it); false for a pane orchd only detected (no hooks) */
+    val registered: Boolean = true,
 ) {
     val needsYou get() = status == "blocked"
     val working get() = status == "working"

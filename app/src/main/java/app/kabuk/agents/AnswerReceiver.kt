@@ -15,10 +15,10 @@ class AnswerReceiver : BroadcastReceiver() {
         if (question >= 0) {
             val label = intent.getStringExtra("label") ?: return
             val key = intent.getStringExtra("agent") ?: return
-            if (tab == null) return AgentNotifier.answered(key, "q$question", label, false)
+            if (tab == null) return AgentNotifier.answered(key, "q$question", label, AnswerOutcome.OFFLINE)
             val pending = goAsync()
-            tab.answerQuestion(question, label) { ok ->
-                AgentNotifier.answered(key, "q$question", label, ok)
+            tab.answerQuestion(question, label) { outcome ->
+                AgentNotifier.answered(key, "q$question", label, outcome)
                 pending.finish()
             }
             return
@@ -28,10 +28,10 @@ class AnswerReceiver : BroadcastReceiver() {
         val label = intent.getStringExtra("label") ?: ""
         val expect = intent.getStringExtra("expect") ?: return
         val agent = intent.getStringExtra("agent") ?: return
-        if (tab == null) return AgentNotifier.answered(agent, expect, "$key · $label", false)
+        if (tab == null) return AgentNotifier.answered(agent, expect, "$key · $label", AnswerOutcome.OFFLINE)
         val pending = goAsync()
-        tab.answerAgent(pane, Choice(key, label, false), expect) { ok ->
-            AgentNotifier.answered(agent, expect, "$key · $label", ok)
+        tab.answerAgent(pane, Choice(key, label, false), expect) { outcome ->
+            AgentNotifier.answered(agent, expect, "$key · $label", outcome)
             pending.finish()
         }
     }

@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.kabuk.agents.Agent
+import app.kabuk.agents.AnswerOutcome
 import app.kabuk.term.SshTab
 import app.kabuk.term.TabManager
 
@@ -105,6 +106,10 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Agents", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    // a message to an agent, reachable without scrolling past the agent list (the timeline is below)
+                    if (comms.isNotEmpty()) androidx.compose.material3.TextButton(onClick = {
+                        messageOn = (TabManager.currentTab() as? SshTab)?.takeIf { it.usesOrch } ?: comms.first()
+                    }) { Text("Message…") }
                     if (TabManager.sshTabs().any { it.canSend }) androidx.compose.material3.FilledTonalButton(onClick = { newAgent = true }) {
                         Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("New agent")
                     }
@@ -117,8 +122,8 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                 }
                 items(asks, key = { (t, q) -> "${t.id}/q${q.id}" }) { (t, q) ->
                     BusQuestionRow(q, onOption = { opt ->
-                        t.answerQuestion(q.id, opt) { ok ->
-                            TabManager.toast(if (ok) "Answered ${q.from}: $opt" else "Not sent: already answered")
+                        t.answerQuestion(q.id, opt) { r ->
+                            TabManager.toast(if (r == AnswerOutcome.SENT) "Answered ${q.from}: $opt" else r.text)
                         }
                     }, onReply = { replyTo = t to q })
                 }
@@ -132,7 +137,7 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                     }
                     items(group, key = { (t, a) -> "${t.id}/${a.terminalId}" }) { (t, a) ->
                         val q = t.questions.value[a.paneId]
-                        AgentRow(t, a, rows.map { it.first }.distinct().size > 1, q,
+                        AgentRow(t, a, rows.map { it.first }.distinct().size > 1, q, q?.let { t.answeredWith(a.paneId, it.fingerprint) },
                             onClick = {
                                 TabManager.select(t.id)
                                 t.focusAgent(a) { ok -> if (!ok) TabManager.toast("Couldn't switch to that agent") }
@@ -141,10 +146,10 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                             onAnswer = { c ->
                                 val tell = c.label.startsWith("No", ignoreCase = true) && c.label.contains("tell", ignoreCase = true)
                                 if (tell) onDismiss()
-                                t.answerAgent(a.paneId, c, q!!.fingerprint) { ok ->
-                                    TabManager.toast(if (ok) "Sent ${c.key} · ${c.label} to ${a.place}" else "Not sent: the question changed")
+                                t.answerAgent(a.paneId, c, q!!.fingerprint) { r ->
+                                    TabManager.toast(if (r == AnswerOutcome.SENT) "Sent ${c.key} · ${c.label} to ${a.place}" else r.text)
                                     // the reason must reach this agent: open the message box only once it's on screen
-                                    if (ok && tell) {
+                                    if (r == AnswerOutcome.SENT && tell) {
                                         TabManager.select(t.id)
                                         t.focusAgent(a) { focused ->
                                             if (!focused) return@focusAgent TabManager.toast("Couldn't switch to ${a.place}")
@@ -180,11 +185,12 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
     replyTo?.let { (t, q) ->
         TextDialog("Answer ${q.from}", q.text, "Your answer", onDismiss = { replyTo = null }) { text ->
             replyTo = null
-            t.answerQuestion(q.id, text) { ok -> TabManager.toast(if (ok) "Answered ${q.from}" else "Not sent: already answered") }
+            t.answerQuestion(q.id, text) { r -> TabManager.toast(if (r == AnswerOutcome.SENT) "Answered ${q.from}" else r.text) }
         }
     }
     messageOn?.let { t ->
-        val names = (t.agents.value.map { it.bus }.filter { it.isNotEmpty() } + "all").distinct()
+        // only agents the bus knows can receive a message; a pane orchd merely detected (no hooks) can't
+        val names = (t.agents.value.filter { it.registered && it.bus.isNotEmpty() }.map { it.bus } + "all").distinct()
         MessageDialog(names, onDismiss = { messageOn = null }) { to, text ->
             messageOn = null
             t.sendBus(to, text) { ok -> TabManager.toast(if (ok) "Sent to $to" else "Couldn't send to $to") }
@@ -203,7 +209,12 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun AgentRow(t: SshTab, a: Agent, showHost: Boolean, q: app.kabuk.text.Pending?, onClick: () -> Unit, onAnswer: (app.kabuk.text.Choice) -> Unit) {
+private fun AgentRow(
+    t: SshTab, a: Agent, showHost: Boolean, q: app.kabuk.text.Pending?,
+    /** the choice this phone already sent for [q] (the agent hasn't taken it yet), or null */
+    answered: String?,
+    onClick: () -> Unit, onAnswer: (app.kabuk.text.Choice) -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp),
     ) {
@@ -226,7 +237,13 @@ private fun AgentRow(t: SshTab, a: Agent, showHost: Boolean, q: app.kabuk.text.P
                 modifier = Modifier.padding(start = 24.dp, top = 6.dp).fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp)).background(Surface2).padding(10.dp),
             )
-            androidx.compose.foundation.layout.FlowRow(
+            // answered from this phone, but the dialog is still on screen: no buttons, say so instead
+            if (answered != null) Text(
+                "Answered ${answered}${q.choices.firstOrNull { it.key == answered }?.let { " · ${it.label}" } ?: ""} from this phone · waiting for the agent",
+                style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2,
+                modifier = Modifier.padding(start = 24.dp, top = 8.dp),
+            )
+            else androidx.compose.foundation.layout.FlowRow(
                 Modifier.padding(start = 24.dp, top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {

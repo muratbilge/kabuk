@@ -5,6 +5,7 @@ import app.kabuk.text.Choice
 import app.kabuk.text.Pending
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,9 +17,12 @@ class AnswerLedgerTest {
     @Test fun secondTapIsRefusedUntilReleased() {
         val l = AnswerLedger()
         val k = l.screenKey("orch:p1", build.fingerprint)
-        assertTrue(l.claim(k))
-        assertFalse(l.claim(k))
+        assertNull(l.what(k))
+        assertTrue(l.claim(k, "1"))
+        assertFalse(l.claim(k, "2"))
+        assertEquals("1", l.what(k))
         l.release(k)
+        assertNull(l.what(k))
         assertTrue(l.claim(k))
     }
 
@@ -26,9 +30,10 @@ class AnswerLedgerTest {
     @Test fun dialogThatLeftTheScreenIsForgotten() {
         val l = AnswerLedger()
         val k = l.screenKey("orch:p1", build.fingerprint)
-        assertTrue(l.claim(k))
+        assertTrue(l.claim(k, "1"))
         l.prune(mapOf("orch:p1" to build))          // still on screen: stays answered
         assertFalse(l.claim(k))
+        assertEquals("1", l.what(k))
         l.prune(emptyMap())                          // gone (the agent took the answer)
         assertTrue("asked again later", l.claim(k))
         l.prune(mapOf("orch:p1" to clean))           // a different dialog in that pane
@@ -37,9 +42,10 @@ class AnswerLedgerTest {
 
     @Test fun busQuestionsAreNeverPruned() {
         val l = AnswerLedger()
-        assertTrue(l.claim(l.questionKey(7)))
+        assertTrue(l.claim(l.questionKey(7), "yes"))
         l.prune(emptyMap())
         assertFalse(l.claim(l.questionKey(7)))
+        assertEquals("yes", l.what(l.questionKey(7)))
         assertTrue(l.claim(l.questionKey(8)))
     }
 
