@@ -23,6 +23,12 @@ object AgentNotifier {
     private lateinit var ctx: Context
     private val last = HashMap<String, String>()   // "tab/terminal" -> status
     private val notified = HashMap<String, String>()  // "needs you" shown -> for which question
+    /**
+     * A "needs you" whose agent or question vanished from the stream is cancelled only after a grace period:
+     * a gap (orchd restart, SSH reconnect) must not re-alert the very same question when it is back.
+     */
+    private val vanishing = HashMap<String, Runnable>()
+    private const val GRACE_MS = 45_000L
 
     fun init(c: Context) {
         ctx = c
@@ -43,6 +49,7 @@ object AgentNotifier {
         for (a in now) {
             val key = "${tab.id}/${a.terminalId}"
             seen += key
+            vanishing.remove(key)?.let { TabManager.main.removeCallbacks(it) }
             val before = last.put(key, a.status)
             val watching = TabManager.foreground && TabManager.terminalVisible && TabManager.current.value == tab.id && a.focused
             val id = key.hashCode()
@@ -64,16 +71,29 @@ object AgentNotifier {
         for (q in tab.busQuestions.value) {
             val key = "${tab.id}/q${q.id}"
             seen += key
+            vanishing.remove(key)?.let { TabManager.main.removeCallbacks(it) }
             last[key] = "ask"
             if (notified[key] == null && !(TabManager.foreground && TabManager.agentsOpen)) {
                 notified[key] = "q${q.id}"
                 nm.notify(key.hashCode(), buildQuestion(tab, q, key))
             }
         }
-        // agents and questions that disappeared
-        last.keys.filter { it.startsWith("${tab.id}/") && it !in seen }.forEach {
-            last.remove(it); notified.remove(it); nm.cancel(it.hashCode())
+        // agents and questions that disappeared; a "needs you" stays a little in case the stream only has a gap
+        last.keys.filter { it.startsWith("${tab.id}/") && it !in seen }.forEach { key ->
+            last.remove(key)
+            if (key in notified && !tab.closed) {
+                val r = Runnable { forget(key) }
+                vanishing[key] = r
+                TabManager.main.postDelayed(r, GRACE_MS)
+            } else forget(key)
         }
+    }
+
+    @Synchronized
+    private fun forget(key: String) {
+        vanishing.remove(key)
+        notified.remove(key)
+        ctx.getSystemService(NotificationManager::class.java).cancel(key.hashCode())
     }
 
     private fun buildQuestion(tab: SshTab, q: BusQuestion, key: String): Notification {

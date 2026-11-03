@@ -115,19 +115,22 @@ object Orch {
     /**
      * Answers a dialog on an agent's screen (approval menu). Rereads the pane first and only sends when the same
      * question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one.
+     * Returns null when sent, else a short reason (safe to log: no screen text).
      */
-    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): Boolean {
+    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): String? {
         val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
-        if (code != 0) return false
+        if (code != 0) return "read failed (exit $code)"
         val hash = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
-            ?: return false
-        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return false
-        if (now.fingerprint != expect || now.choices.none { it.key == key }) return false
+            ?: return "no screen hash"
+        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return "no dialog on screen"
+        if (now.fingerprint != expect) return "dialog changed"
+        if (now.choices.none { it.key == key }) return "choice $key not offered"
         // orchd sends only if the screen is still exactly what we read, and answers each screen once:
         // a second phone/TUI answering the same dialog is refused instead of reaching the next one
-        return SshTab.exec(
+        val sent = SshTab.exec(
             c, FIND + "\"\$O\" send ${shellQuote(pane)} ${shellQuote(key)} --expect ${shellQuote(hash)} --lines 60", timeoutS = 8,
-        ).first == 0
+        ).first
+        return if (sent == 0) null else "refused by orchd (exit $sent: screen changed or answered already)"
     }
 
     /** answers a bus question; false when it was already answered (by Telegram, the TUI, …) or on failure */

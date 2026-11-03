@@ -67,9 +67,6 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
     /** agents come from orchtool instead of herdr (the server's "Start with" is orch) */
     val usesOrch get() = host.session == Host.ORCH
-    /** agents come live from herdr's event stream (false: asked every few seconds) */
-    @Volatile var liveAgents = false
-        private set
 
     private val output = object : TerminalOutput() {
         override fun write(data: ByteArray, offset: Int, count: Int) { send(data.copyOfRange(offset, offset + count)) }
@@ -197,7 +194,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             TabManager.cancelPrompts(this)
             runCatching { c.client.disconnect() }
             agents.value = emptyList()
-            questions.value = emptyMap()
+            showQuestions(emptyMap())
             busQuestions.value = emptyList()
             timeline.value = emptyList()
             TabManager.agentsChanged(this)
@@ -351,13 +348,11 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             val end = runCatching {
                 Herdr.stream(c.client, active) { u ->
                     if (!active()) return@stream
-                    liveAgents = true
                     agents.value = u?.agents ?: emptyList()
-                    questions.value = u?.questions ?: emptyMap()
+                    showQuestions(u?.questions ?: emptyMap())
                     TabManager.agentsChanged(this)
                 }
             }.getOrDefault(Herdr.StreamEnd.ENDED)
-            liveAgents = false
             if (end == Herdr.StreamEnd.UNAVAILABLE) break
             try { Thread.sleep(3_000) } catch (_: InterruptedException) { return }
         }
@@ -366,7 +361,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             val list = runCatching { Herdr.agents(c.client) }.getOrNull()
             if (!active()) break
             agents.value = list ?: emptyList()
-            questions.value = emptyMap()
+            showQuestions(emptyMap())
             TabManager.agentsChanged(this)
             // herdr not there: look again once a minute
             try { Thread.sleep(if (list == null) 60_000 else 3_000) } catch (_: InterruptedException) { break }
@@ -375,27 +370,27 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
 
     /** orchtool: `orch watch` streams agents, dialogs, your questions and the timeline */
     private fun watchOrch(c: Conn, active: () -> Boolean) {
-        var lastErr = ""
         while (active()) {
             KLog.i("AGENT", "orch watch start on ${host.name}")
+            // logged on every change, including the first good line ("orch watch live")
+            var lastErr: String? = null
             val end = runCatching {
                 Orch.stream(c.client, active) { u ->
                     if (!active()) return@stream
-                    liveAgents = u != null
                     val err = if (u == null) "orchd not running" else ""
                     if (err != lastErr) { KLog.i("AGENT", err.ifEmpty { "orch watch live" }); lastErr = err }
                     agents.value = u?.agents ?: emptyList()
-                    questions.value = u?.screens ?: emptyMap()
+                    showQuestions(u?.screens ?: emptyMap())
                     busQuestions.value = u?.questions ?: emptyList()
                     timeline.value = u?.timeline ?: emptyList()
                     TabManager.agentsChanged(this)
                 }
             }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
-            liveAgents = false
             KLog.i("AGENT", "orch watch ended: $end")
             // nothing shown may be answered from a stream that is gone: clear it until the next snapshot
+            // (AgentNotifier keeps a "needs you" for a grace period, so a short gap doesn't re-alert it)
             agents.value = emptyList()
-            questions.value = emptyMap()
+            showQuestions(emptyMap())
             busQuestions.value = emptyList()
             timeline.value = emptyList()
             TabManager.agentsChanged(this)
@@ -407,13 +402,12 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     /** answer a bus question (first answer wins); done(false) when it was answered elsewhere already or not sent */
     fun answerQuestion(id: Long, text: String, done: (Boolean) -> Unit) {
         val c = conn ?: return done(false)
-        synchronized(answered) {
-            if (!answered.add("q$id")) return done(false)
-        }
+        val key = ledger.questionKey(id)
+        if (!ledger.claim(key)) { KLog.i("AGENT", "answer question #$id: already sent from this phone"); return done(false) }
         thread {
             val ok = runCatching { Orch.answerQuestion(c.client, id, text) }.getOrDefault(false)
             KLog.i("AGENT", "answer question #$id: ${if (ok) "won" else "not applied"}")
-            if (!ok) synchronized(answered) { answered.remove("q$id") }
+            if (!ok) ledger.release(key)
             TabManager.main.post { done(ok) }
         }
     }
@@ -430,22 +424,29 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     /** answer a waiting agent's question without bringing it on screen; false if the question changed meanwhile */
     fun answerAgent(paneId: String, choice: app.kabuk.text.Choice, expect: String, done: (Boolean) -> Unit) {
         val c = conn ?: return done(false)
-        // each question is answered once: a double tap (or notification + inbox) must not send twice
-        synchronized(answered) {
-            if (!answered.add("$paneId\u0000$expect")) return done(false)
-            if (answered.size > 200) answered.remove(answered.first())
-        }
+        // each dialog is answered once: a double tap (or notification + inbox) must not send twice
+        val key = ledger.screenKey(paneId, expect)
+        if (!ledger.claim(key)) { KLog.i("AGENT", "answer $paneId ${choice.key}: already sent from this phone"); return done(false) }
         thread {
-            val ok = runCatching {
+            // null = sent, else why not (only the pane and the key are logged, never the dialog's text)
+            val why = runCatching {
                 if (usesOrch) Orch.answerScreen(c.client, paneId, choice.key, expect)
                 else Herdr.answer(c.client, paneId, choice.key, expect)
-            }.getOrDefault(false)
-            // not sent (question changed, connection down): this question may be answered again
-            if (!ok) synchronized(answered) { answered.remove("$paneId\u0000$expect") }
-            TabManager.main.post { done(ok) }
+            }.getOrElse { "error: ${(it.message ?: it.javaClass.simpleName).lineSequence().first().take(80)}" }
+            KLog.i("AGENT", "answer $paneId ${choice.key}: ${why ?: "sent"}")
+            // not sent (dialog changed, connection down): this dialog may be answered again
+            if (why != null) ledger.release(key)
+            TabManager.main.post { done(why == null) }
         }
     }
-    private val answered = LinkedHashSet<String>()
+
+    /** dialogs and questions answered from this phone; a dialog is forgotten once it left the screen */
+    private val ledger = app.kabuk.agents.AnswerLedger()
+
+    private fun showQuestions(open: Map<String, app.kabuk.text.Pending>) {
+        questions.value = open
+        ledger.prune(open)
+    }
 
     /** done(null) = started, else what went wrong */
     fun startAgent(dir: String, tool: String, done: (String?) -> Unit) {

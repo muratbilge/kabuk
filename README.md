@@ -5,6 +5,19 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 
 ## Features
 
+### orchtool, updater, live log (0.5)
+- **Start with: orch.** The server's orchtool TUI runs in the tab; agents, their dialogs, the questions they ask
+  you (`ask_human`) and the message timeline come live from `orch watch --json`. The agents sheet shows "Asks you"
+  with the agent's options and Reply…, and Comms with Message… to one agent or all. A dialog is answered with
+  `orch send --expect <screen hash>`: orchd sends only if the screen is still what the phone read, and answers each
+  dialog once (first answer wins, from any client). Falls back like Auto when orch isn't installed.
+- **In-app updater** (Settings → Update): `update.json` is signed with a key whose public half is compiled in; the
+  APK must match its size, SHA-256, package and signing certificate before Android's installer is asked.
+  Publishing: `scripts/release.sh` (see Build).
+- **Live log** (Settings → Diagnostics, on by default while the app is young): connection, agent and crash lines go
+  in HMAC-signed batches to `scripts/logsink` on the DevBox; read them with `scripts/livelog`. Never passwords or
+  prompts.
+
 ### herdr native (new in 0.4)
 - **Live:** a small watcher (Python, `assets/herdr_watch.py`) runs on the server over the SSH connection and
   listens to herdr's event stream (`events.subscribe`). Status changes arrive at once instead of polling every 3 s
@@ -94,10 +107,13 @@ docker rm -f kabuk-sshd-test
 term/   TermTab (one tab) → SshTab (sshj, reconnect loop) / LocalTab (Termux TerminalSession)
         TerminalCanvasView: draws with Termux's TerminalRenderer; own touch, selection and keyboard handling
         TabManager: all tabs, prompts for background threads, clipboard; Themes
-agents/ Herdr (agent list / focus / pane read over SSH), AgentNotifier
+agents/ Herdr (herdr CLI over SSH), Orch (orchtool: watch stream, answers, bus), AnswerLedger (answer once),
+        AgentNotifier (needs-you / finished / asks-you notifications with answer buttons)
 text/   Unwrap (re-join wrapped lines), QuickReplies (numbered menus on screen)
 ssh/    KeyPairStore (Ed25519 via BouncyCastle), HostKeys (trust on first use)
 data/   Hosts, Settings, SecretBox (Keystore AES-GCM)
+update/ Updater (download, verify, PackageInstaller), UpdateManifest (signed update.json)
+log/    KLog (logger + crash handler), LogShipper (HMAC-signed batches to scripts/logsink)
 service/SessionService: foreground service + wake lock
 ui/     Compose screens: terminal, key bar, servers, settings, copy text
 ```

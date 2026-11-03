@@ -116,13 +116,17 @@ object Herdr {
     /**
      * Answers an agent's question by pane, without bringing it on screen. Reads the pane first and only sends
      * when the same question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one.
+     * Returns null when sent, else a short reason (safe to log: no screen text). Unlike orchtool, herdr has no
+     * atomic "send only if the screen is still this": two clients answering at once can both get through.
      */
-    fun answer(c: SSHClient, paneId: String, key: String, expect: String): Boolean {
+    fun answer(c: SSHClient, paneId: String, key: String, expect: String): String? {
         val (code, text) = SshTab.exec(c, FIND + "\"\$H\" pane read ${shellQuote(paneId)} --source recent --lines 60", timeoutS = 8)
-        if (code != 0) return false
-        val now = app.kabuk.text.QuickReplies.pending(text) ?: return false
-        if (now.fingerprint != expect || now.choices.none { it.key == key }) return false
-        return SshTab.exec(c, FIND + "\"\$H\" pane send-text ${shellQuote(paneId)} ${shellQuote(key)}", timeoutS = 8).first == 0
+        if (code != 0) return "read failed (exit $code)"
+        val now = app.kabuk.text.QuickReplies.pending(text) ?: return "no dialog on screen"
+        if (now.fingerprint != expect) return "dialog changed"
+        if (now.choices.none { it.key == key }) return "choice $key not offered"
+        val sent = SshTab.exec(c, FIND + "\"\$H\" pane send-text ${shellQuote(paneId)} ${shellQuote(key)}", timeoutS = 8).first
+        return if (sent == 0) null else "send-text failed (exit $sent)"
     }
 
     /** a new workspace in [dir] with [tool] (claude, codex) started in it, brought on screen */

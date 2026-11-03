@@ -6,6 +6,7 @@
 #                           http://192.168.178.11:8000/apk/kabuk/ . NOTES="..." sets the release notes (default: last
 #                           commit subject). PUBLISH=0 skips the apk-share step. The APK itself is never handed out as a
 #                           link: the app's own updater downloads and verifies it (key, SHA-256, signer).
+#                           A versionCode that is already published is refused: bump it in app/build.gradle.kts.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BT=${BUILD_TOOLS:-$HOME/Android/Sdk/build-tools/35.0.0}
@@ -18,6 +19,13 @@ fi
 ./gradlew --console=plain :app:assembleRelease -q
 IN=$(ls app/build/outputs/apk/release/kabuk-*-release.apk | head -1)
 VER=$(basename "$IN" | sed -E 's/kabuk-(.*)-release.apk/\1/')
+CODE=$("$BT/aapt2" dump badging "$IN" | sed -nE "s/^package: .*versionCode='([0-9]+)'.*/\1/p")
+SHARE="${APK_SHARE:-$HOME/apk-share}/kabuk"
+# published builds are immutable (the phone caches update.json by versionCode): never reuse a code
+if [ "${PUBLISH:-1}" != 0 ] && [ -e "$SHARE/kabuk-$CODE.apk" ]; then
+  echo "ERROR: $SHARE/kabuk-$CODE.apk is already published (versionCode $CODE = $VER): bump appVersionCode in app/build.gradle.kts" >&2
+  exit 1
+fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 "$BT/zipalign" -f -p 4 "$IN" "$TMP/aligned.apk"
 "$BT/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-pass pass:android --key-pass pass:android \
@@ -28,7 +36,7 @@ cp "$TMP/kabuk.apk" "$HOME/apks/kabuk/kabuk-$VER.apk"
 echo "OK: $HOME/apks/kabuk/kabuk-$VER.apk (signature verified)"
 
 if [ "${PUBLISH:-1}" != 0 ]; then
-  python3 "$ROOT/scripts/publish_update.py" "$TMP/kabuk.apk" "${APK_SHARE:-$HOME/apk-share}/kabuk" \
+  python3 "$ROOT/scripts/publish_update.py" "$TMP/kabuk.apk" "$SHARE" \
     --notes "${NOTES:-$(git -C "$ROOT" log -1 --format=%s)}"
   echo "Next: Kabuk -> Settings -> Check for update."
 fi
