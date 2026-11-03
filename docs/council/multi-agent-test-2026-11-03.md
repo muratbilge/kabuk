@@ -16,6 +16,19 @@ the fake agents' key logs, `orch questions --all`, `orch tail` and Kabuk's live 
 | 6 | working → idle transition ("finished" notification) | not confirmed by the user (quiet notification) |
 | 7 | Message… → all from the agents sheet | ✔ `murat → all` on the bus; but the entry point was hard to find (see below) |
 
+## Codex round, 10:27–10:32 (on 0.5.2)
+
+Four fakes: alpha, beta (`claude`) and gamma, delta (`codex` = a symlink to the same script; orchd keys the kind on
+the program's basename). Codex screens: `Would you like to run the following command?` / `› 1. Yes, proceed (y)`
+…; the codex panes are `registered: false` (no hooks), like a real Codex.
+
+| # | Scenario | Result |
+|---|----------|--------|
+| C1 | codex (gamma) and claude (alpha) dialogs at once; gamma from the notification, alpha from the inbox | ✔ "codex needs you · gamma"; gamma got `1`, alpha `2`, once each; Codex menu parsed on a live screen |
+| C2 | Message… at the top of the agents sheet; recipient chips | ✔ found at once; `all` + registered agents only, none of the fakes |
+| C3 | slow codex dialog (delta): answer from the notification, then look at the inbox row | ✔ row shows "Answered 1 · Yes, proceed (y) from this phone · waiting for the agent" instead of buttons |
+| C3a | the user then opened delta's pane and used the terminal's reply chips / arrows | the raw keys (`1 1 2 ↓↓↓ 3 1 2`) all reached the still-open fake dialog: the terminal path is a keyboard — no dedupe, no `--expect`, **no log line**. Fine for real agents (they take the first key), but add a `KLog` line for chip taps so sessions stay readable |
+
 ## Findings for Kabuk (0.5.2)
 
 1. **"Not sent: the question changed" is shown when the phone itself already answered that dialog.** With an
