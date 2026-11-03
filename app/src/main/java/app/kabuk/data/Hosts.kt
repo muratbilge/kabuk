@@ -41,9 +41,11 @@ data class Host(
         val shell = "printf '\\033[2m[kabuk] no herdr or tmux here: plain shell, it ends when the connection drops]\\033[0m\\r\\n'; " +
             "exec \"\${SHELL:-/bin/sh}\" -l"
         // wrapped in sh so it works whatever the login shell is (bash, zsh, fish)
-        // orchtool's TUI (its daemon keeps the agents running); without orch on the server: like Auto
+        // orchtool's TUI (its daemon keeps the agents running), started through a login shell so that the TUI,
+        // an orchd it starts and the agents those spawn get the real environment (PATH, JAVA_HOME, …) and not
+        // sshd's bare one; without orch on the server: like Auto
         val orch = "O=\$(command -v orch || { [ -x \"\$HOME/.local/bin/orch\" ] && echo \"\$HOME/.local/bin/orch\"; }); " +
-            "[ -n \"\$O\" ] && exec \"\$O\"; "
+            "[ -n \"\$O\" ] && { export O; exec \"\${SHELL:-/bin/sh}\" -lc 'exec \"\$O\"'; }; "
         return when (session) {
             ORCH -> "sh -c " + shellQuote(orch + herdr + tmux + shell)
             AUTO -> "sh -c " + shellQuote(herdr + tmux + shell)

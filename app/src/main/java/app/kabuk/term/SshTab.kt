@@ -66,10 +66,16 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     /** orchtool backend: questions agents asked you on the bus, and the timeline (empty with herdr) */
     val busQuestions = MutableStateFlow<List<app.kabuk.agents.BusQuestion>>(emptyList())
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
-    /** orchtool: the server's orch streams a newer format than this app understands (shown in the agents sheet) */
+    /** orchtool: a note about the server's orch (newer or older than this app understands), for the agents sheet */
     val orchNote = MutableStateFlow<String?>(null)
-    /** agents come from orchtool instead of herdr (the server's "Start with" is orch) */
-    val usesOrch get() = host.session == Host.ORCH
+    /** the server's "Start with" is orch */
+    private val orchHost get() = host.session == Host.ORCH
+    /**
+     * Agents, dialogs, questions and the timeline come from orchtool on this connection (and answers go through
+     * it). False on an orch server where orch turned out to be missing or too old: then herdr, like Auto.
+     */
+    @Volatile var usesOrch = false
+        private set
 
     private val output = object : TerminalOutput() {
         override fun write(data: ByteArray, offset: Int, count: Int) { send(data.copyOfRange(offset, offset + count)) }
@@ -197,7 +203,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             TabManager.cancelPrompts(this)
             runCatching { c.client.disconnect() }
             agents.value = emptyList()
-            showQuestions(emptyMap())
+            // the ledger is kept: the same dialog may still be there after the reconnect
+            questions.value = emptyMap()
             busQuestions.value = emptyList()
             timeline.value = emptyList()
             TabManager.agentsChanged(this)
@@ -345,7 +352,14 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
 
     private fun watchAgents(c: Conn) {
         val active = { conn === c && !closing }
-        if (usesOrch) return watchOrch(c, active)
+        usesOrch = orchHost
+        if (usesOrch) {
+            // returns only when orch is missing or too old on that server: then herdr, like the terminal did
+            watchOrch(c, active)
+            if (!active()) return
+            usesOrch = false
+            TabManager.agentsChanged(this)
+        }
         // live: herdr's event stream through a small watcher on the server; changes arrive at once
         while (active()) {
             val end = runCatching {
@@ -396,15 +410,23 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
             KLog.i("AGENT", "orch watch ended: $end")
             // nothing shown may be answered from a stream that is gone: clear it until the next snapshot
-            // (AgentNotifier keeps a "needs you" for a grace period, so a short gap doesn't re-alert it)
+            // (AgentNotifier keeps a "needs you" for a grace period, so a short gap doesn't re-alert it; the
+            // ledger is kept too, so the same dialog isn't answered again when the stream is back)
             agents.value = emptyList()
-            showQuestions(emptyMap())
+            questions.value = emptyMap()
             busQuestions.value = emptyList()
             timeline.value = emptyList()
             orchNote.value = null
             TabManager.agentsChanged(this)
-            // orch not installed there: look again once a minute
-            try { Thread.sleep(if (end == Herdr.StreamEnd.UNAVAILABLE) 60_000 else 3_000) } catch (_: InterruptedException) { return }
+            when (end) {
+                Herdr.StreamEnd.UNAVAILABLE -> { KLog.i("AGENT", "no orch on ${host.name}: herdr instead"); return }
+                Herdr.StreamEnd.MISMATCH -> {
+                    KLog.w("AGENT", "orch on ${host.name} has no `watch` (too old for this Kabuk): herdr instead")
+                    orchNote.value = "orch on ${host.name} is too old for this Kabuk (no orch watch): update orchtool"
+                    return
+                }
+                Herdr.StreamEnd.ENDED -> try { Thread.sleep(3_000) } catch (_: InterruptedException) { return }
+            }
         }
     }
 
@@ -446,8 +468,12 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                     .let { why -> Orch.Answered(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED, why ?: "sent") }
             }.getOrElse { Orch.Answered(AnswerOutcome.FAILED, "error: ${it.reason()}") }
             KLog.i("AGENT", "answer $paneId ${if (choice.key == Orch.ESC) "Esc" else choice.key}: ${r.why}")
-            // not sent (dialog changed, connection down, no reply): this dialog may be answered again
-            if (r.outcome != AnswerOutcome.SENT) { ledger.release(key); TabManager.agentsChanged(this) }
+            // certainly not sent: this dialog may be answered again. Unsure (no reply, orch failed, orchd
+            // unreachable): orchd refuses a second answer to the same screen itself, so a retap is safe on an
+            // orch pane; a herdr pane has no such memory, so the claim stays until the dialog leaves the screen
+            val uncertain = r.outcome == AnswerOutcome.UNSURE || r.outcome == AnswerOutcome.FAILED || r.outcome == AnswerOutcome.DAEMON
+            val keep = r.outcome == AnswerOutcome.SENT || (uncertain && (!usesOrch || paneId.startsWith("herdr:")))
+            if (!keep) { ledger.release(key); TabManager.agentsChanged(this) }
             TabManager.main.post { done(r.outcome) }
         }
     }

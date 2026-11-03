@@ -8,9 +8,9 @@ import java.io.File
 
 /** Runs the command Kabuk sends after login through a real sh, the way sshd does. */
 class RemoteCommandTest {
-    private fun run(cmd: String, path: String, home: String = "/nonexistent"): String {
+    private fun run(cmd: String, path: String, home: String = "/nonexistent", shell: String = "/bin/echo"): String {
         val p = ProcessBuilder("/bin/sh", "-c", cmd).redirectErrorStream(true)
-        p.environment().apply { clear(); put("PATH", path); put("SHELL", "/bin/echo"); put("HOME", home) }
+        p.environment().apply { clear(); put("PATH", path); put("SHELL", shell); put("HOME", home) }
         val proc = p.start()
         val out = proc.inputStream.bufferedReader().readText()
         proc.waitFor()
@@ -34,7 +34,9 @@ class RemoteCommandTest {
         File(home, ".local/bin").mkdirs()
         File(home, ".local/bin/orch").apply { writeText("#!/bin/sh\necho orch-tui \"$@\"\n"); setExecutable(true) }
         val cmd = Host(id = "x", name = "dev", host = "h", user = "u", session = Host.ORCH).remoteCommand()!!
-        assertEquals("orch-tui", run(cmd, "/usr/bin:/bin", home.absolutePath).trim())
+        // through the login shell (a real sh here: its profile may reset PATH, the absolute $O still works)
+        assertTrue(cmd, cmd.contains("export O; exec \"\${SHELL:-/bin/sh}\" -lc "))
+        assertEquals("orch-tui", run(cmd, "/usr/bin:/bin", home.absolutePath, shell = "/bin/sh").trim())
         // without orch: falls back like Auto (here: no herdr/tmux either, so the plain shell)
         File(home, ".local/bin/orch").delete()
         val dir = createTempDir()

@@ -74,4 +74,18 @@ class OrchContractTest {
         assertEquals(3, sh(Orch.sendCommand("orch:p1", "1", "abc"), home))
         home.deleteRecursively()
     }
+
+    /** after a silent first try, "answered" means it landed and "changed" may mean the same */
+    @Test fun retryPolicy() {
+        assertEquals(AnswerOutcome.SENT, Orch.sendOutcome(0, retried = false).outcome)
+        assertEquals(AnswerOutcome.SENT, Orch.sendOutcome(0, retried = true).outcome)
+        assertEquals(AnswerOutcome.SENT, Orch.sendOutcome(11, retried = true).outcome)
+        assertEquals(AnswerOutcome.TAKEN, Orch.sendOutcome(11, retried = false).outcome)
+        assertEquals(AnswerOutcome.UNSURE, Orch.sendOutcome(10, retried = true).outcome)
+        assertEquals(AnswerOutcome.CHANGED, Orch.sendOutcome(10, retried = false).outcome)
+        assertEquals(AnswerOutcome.UNSURE, Orch.sendOutcome(null, retried = true).outcome)
+        assertEquals(AnswerOutcome.UNSURE, Orch.sendOutcome(null, retried = false).outcome)
+        assertEquals(AnswerOutcome.DAEMON, Orch.sendOutcome(20, retried = true).outcome)
+        assertEquals("won", Orch.sendOutcome(0, retried = false, what = "won").why)
+    }
 }

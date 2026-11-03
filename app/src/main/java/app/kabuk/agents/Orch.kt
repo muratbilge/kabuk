@@ -118,12 +118,16 @@ object Orch {
                     }
                 } catch (_: InterruptedException) {}
             }
+            var last: String? = null
             try {
             while (active()) {
                 val line = reader.readLine() ?: break
                 lastLine.set(System.currentTimeMillis())
                 if (line.isBlank()) continue
                 any = true
+                // the heartbeat resends an unchanged line: nothing to parse, show or notify again
+                if (line == last) continue
+                last = line
                 // only the exception's class: on Android a JSONException's message quotes the whole input
                 // line, which holds dialog and question text that must never reach the log
                 val u = runCatching { parseUpdate(line) }
@@ -133,7 +137,11 @@ object Orch {
             } finally { watchdog.interrupt() }
             if (!any) {
                 cmd.join(3, java.util.concurrent.TimeUnit.SECONDS)
-                if (cmd.exitStatus == 3) return Herdr.StreamEnd.UNAVAILABLE
+                when (cmd.exitStatus) {
+                    3 -> return Herdr.StreamEnd.UNAVAILABLE
+                    // an orch from before `watch` (clap: unknown subcommand)
+                    2 -> return Herdr.StreamEnd.MISMATCH
+                }
             }
             return Herdr.StreamEnd.ENDED
         } finally {
@@ -150,20 +158,35 @@ object Orch {
             " --expect ${shellQuote(hash)} --lines 60"
 
     /**
-     * Runs an `orch` command that is safe to repeat (orchd answers each screen state and each question once).
-     * No reply within the timeout → one retry: a first try that landed is then refused with 11 ("answered"),
-     * which counts as sent; a second silence is UNSURE. Returns the exit status, or null for that.
+     * Runs an `orch` command. With [retry] (only when orchd answers it once: orch panes, bus questions) no reply
+     * within the timeout → one retry: a first try that landed is then refused with 11 ("answered"), which counts
+     * as sent; a second silence is UNSURE. A herdr pane has no such memory, so a retry could type the key twice:
+     * never retry there. Returns the exit status (null = no reply) and whether it came from the retry.
      */
-    private fun once(c: SSHClient, cmd: String): Pair<Int?, Boolean> {
-        for (attempt in 0..1) {
+    private fun once(c: SSHClient, cmd: String, retry: Boolean): Pair<Int?, Boolean> {
+        val tries = if (retry) 2 else 1
+        for (attempt in 0 until tries) {
             try {
                 return SshTab.exec(c, cmd, timeoutS = 8).first to (attempt == 1)
             } catch (e: java.io.IOException) {
                 if (!e.message.orEmpty().contains("took longer")) throw e
-                if (attempt == 0) KLog.w("AGENT", "orch gave no reply in 8 s: trying once more")
+                if (attempt < tries - 1) KLog.w("AGENT", "orch gave no reply in 8 s: trying once more")
             }
         }
-        return null to true
+        return null to (tries == 2)
+    }
+
+    /**
+     * What a repeatable command's exit status means, given whether it came from the retry: after a silent
+     * first try, "answered" means the first try landed, and "the screen changed" may mean the same (the agent
+     * took the key and moved on), so that is UNSURE rather than a confident "not sent".
+     */
+    internal fun sendOutcome(exit: Int?, retried: Boolean, what: String = "sent"): Answered = when {
+        exit == 0 -> Answered(AnswerOutcome.SENT, if (retried) "$what on the second try" else what)
+        retried && exit == 11 -> Answered(AnswerOutcome.SENT, "the first try landed (refused as answered on the retry)")
+        retried && exit == 10 -> Answered(AnswerOutcome.UNSURE, "the screen changed after a silent first try (it may have landed)")
+        exit == 11 -> Answered(AnswerOutcome.TAKEN, "answered already")
+        else -> Answered(outcomeOf(exit), "not $what (exit $exit)")
     }
 
     /**
@@ -180,23 +203,14 @@ object Orch {
         val now = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
         if (now.fingerprint != expect) return Answered(AnswerOutcome.CHANGED, "dialog changed")
         if (key != ESC && now.choices.none { it.key == key }) return Answered(AnswerOutcome.CHANGED, "choice $key not offered")
-        val (sent, retried) = once(c, sendCommand(pane, key, hash))
-        return when {
-            sent == 0 -> Answered(AnswerOutcome.SENT, if (retried) "sent on the second try" else "sent")
-            sent == 11 && retried -> Answered(AnswerOutcome.SENT, "the first try landed (refused as answered on the retry)")
-            else -> Answered(outcomeOf(sent), "refused by orch (exit $sent)")
-        }
+        val (sent, retried) = once(c, sendCommand(pane, key, hash), retry = !pane.startsWith("herdr:"))
+        return sendOutcome(sent, retried)
     }
 
     /** answers a bus question (first answer wins): TAKEN when it was answered already (the TUI, the CLI, …) */
     fun answerQuestion(c: SSHClient, id: Long, text: String): Answered {
-        val (exit, retried) = once(c, FIND + "\"\$O\" answer --by kabuk --literal $id -- ${shellQuote(text)}")
-        return when {
-            exit == 0 -> Answered(AnswerOutcome.SENT, if (retried) "won on the second try" else "won")
-            exit == 11 && retried -> Answered(AnswerOutcome.SENT, "the first try won (refused as answered on the retry)")
-            exit == 11 -> Answered(AnswerOutcome.TAKEN, "answered already")
-            else -> Answered(outcomeOf(exit), "not applied (exit $exit)")
-        }
+        val (exit, retried) = once(c, FIND + "\"\$O\" answer --by kabuk --literal $id -- ${shellQuote(text)}", retry = true)
+        return sendOutcome(exit, retried, what = "won")
     }
 
     /** a message from you to an agent (by its bus name, or "all") */
@@ -206,10 +220,13 @@ object Orch {
     /** [tool] (claude, codex) in a new orch pane in [dir] (its folder's workspace), brought on screen */
     fun startAgent(c: SSHClient, dir: String, tool: String): Boolean {
         val cwd = if (dir == "~" || dir.startsWith("~/")) "\"\$HOME\"" + shellQuote(dir.removePrefix("~")) else shellQuote(dir)
+        // run through a login shell (bash, zsh or fish alike: it only execs sh with the real command), so the
+        // agent gets the user's real environment (PATH, JAVA_HOME, …), not the bare one of an SSH exec channel
+        val inner = "cd $cwd 2>/dev/null || exit 4; P=\$(\"\$O\" new --cwd \"\$PWD\" -- ${shellQuote(tool)}) || exit 1; \"\$O\" focus \"\$P\""
         val (code, _) = SshTab.exec(
-            c, FIND + "cd $cwd 2>/dev/null || exit 4; P=\$(\"\$O\" new --cwd \"\$PWD\" -- ${shellQuote(tool)}) || exit 1; " +
-                "\"\$O\" focus \"\$P\"",
-            timeoutS = 10,
+            c, FIND + "export O; KABUK_CMD=${shellQuote(inner)}; export KABUK_CMD; " +
+                "exec \"\${SHELL:-/bin/sh}\" -lc 'exec sh -c \"\$KABUK_CMD\"'",
+            timeoutS = 15,
         )
         if (code == 4) throw java.io.FileNotFoundException(dir)
         return code == 0

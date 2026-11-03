@@ -39,6 +39,9 @@ object AgentNotifier {
         nm.createNotificationChannel(NotificationChannel(DONE, "Agent finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "An agent finished its work"
         })
+        // notifications of an earlier process: their buttons name tab ids that mean nothing now (ids start at 1
+        // again), and whatever is still open is posted afresh once the streams are back
+        nm.cancelAll()
     }
 
     @Synchronized
@@ -55,14 +58,17 @@ object AgentNotifier {
             val id = key.hashCode()
             val q = tab.questions.value[a.paneId]
             val qKey = q?.fingerprint ?: ""
+            // an agent waiting on its own ask_human question is "blocked" too: that question has its own
+            // notification with its options, so no second, button-less "needs you" for the same thing
+            val asking = q == null && a.bus.isNotEmpty() && tab.busQuestions.value.any { it.from == a.bus }
             when {
                 // still waiting and not notified (for this question) yet; also catches up after you leave the screen
-                a.needsYou && notified[key] != qKey && !watching -> {
+                a.needsYou && !asking && notified[key] != qKey && !watching -> {
                     notified[key] = qKey
                     nm.notify(id, build(tab, a, NEEDS, "${a.name} needs you · ${a.place}",
                         q?.prompt?.ifBlank { null } ?: "Waiting for your answer on ${tab.hostName}", q))
                 }
-                !a.needsYou && key in notified -> { notified -= key; nm.cancel(id) }
+                (!a.needsYou || asking) && key in notified -> { notified -= key; nm.cancel(id) }
                 before == "working" && a.resting && Settings.current.notifyFinished && !watching ->
                     nm.notify(id, build(tab, a, DONE, "${a.name} finished · ${a.place}", "Ready for the next prompt on ${tab.hostName}"))
             }
@@ -115,7 +121,8 @@ object AgentNotifier {
             val identity = Uri.parse("kabuk://ask/${tab.id}/${q.id}/$i")
             val bi = PendingIntent.getBroadcast(ctx, identity.hashCode(),
                 Intent(ctx, AnswerReceiver::class.java).setData(identity)
-                    .putExtra("tab", tab.id).putExtra("question", q.id).putExtra("label", opt).putExtra("agent", key),
+                    .putExtra("tab", tab.id).putExtra("host", tab.hostId).putExtra("question", q.id)
+                    .putExtra("label", opt).putExtra("agent", key),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val label = if (opt.length > 20) opt.take(19).trimEnd() + "…" else opt
             b.addAction(Notification.Action.Builder(null, label, bi).setAuthenticationRequired(true).build())
@@ -161,7 +168,8 @@ object AgentNotifier {
         } else {
             PendingIntent.getBroadcast(ctx, req,
                 Intent(ctx, AnswerReceiver::class.java).setData(identity)
-                    .putExtra("tab", tab.id).putExtra("pane", a.paneId).putExtra("key", c.key).putExtra("label", c.label)
+                    .putExtra("tab", tab.id).putExtra("host", tab.hostId)
+                    .putExtra("pane", a.paneId).putExtra("key", c.key).putExtra("label", c.label)
                     .putExtra("expect", q.fingerprint)
                     .putExtra("agent", "${tab.id}/${a.terminalId}"),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

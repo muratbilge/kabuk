@@ -16,8 +16,8 @@ enum class AnswerOutcome(val text: String) {
     GONE("Not sent: that agent is gone"),
     /** the program in the pane isn't reading its input right now */
     STUCK("Not sent: the agent isn't taking input"),
-    /** orchd isn't running on the server, or orch isn't installed there */
-    DAEMON("Not sent: orchd isn't running"),
+    /** orchd couldn't be reached (not running, or the connection broke mid-request), or orch isn't installed */
+    DAEMON("Couldn't reach orchd: check the agent"),
     /** the phone and the server's orch disagree about the commands (one of them is too old) */
     MISMATCH("Not sent: Kabuk and orch disagree, update one of them"),
     /** orch gave no reply in time, twice: the answer may or may not have landed */

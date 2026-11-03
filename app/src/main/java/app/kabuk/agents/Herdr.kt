@@ -70,7 +70,8 @@ object Herdr {
     /** one update from the watcher: the agents and the open question of each waiting one (by pane id) */
     class Update(val agents: List<Agent>, val questions: Map<String, app.kabuk.text.Pending>)
 
-    enum class StreamEnd { UNAVAILABLE, ENDED }
+    /** UNAVAILABLE: the tool isn't on the server; MISMATCH: it is, but too old for this app (no `orch watch`) */
+    enum class StreamEnd { UNAVAILABLE, MISMATCH, ENDED }
 
     private val watchScript: String by lazy {
         app.kabuk.term.TabManager.app.assets.open("herdr_watch.py").bufferedReader().use { it.readText() }

@@ -6,6 +6,12 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.4 — fixes from orchtool's review of Kabuk.** The orch TUI and agents started from the phone run through a
+  login shell (real PATH and profile). A herdr pane's dialog is never retried (no answered-once memory there); a
+  screen that changed after a silent try is "Unsure", not "changed"; the answer ledger survives stream gaps and is
+  kept where a retap could type twice. An orch server without orch (or with one too old for `orch watch`) falls back
+  to herdr for the agents too. One notification per `ask_human` (no extra "needs you"). Notification buttons name the
+  server and are dropped when stale; old notifications are cleared at start. Unchanged heartbeat lines are skipped.
 - **0.5.3 — honest contract with orchtool.** Every answer reports what orch said (exit-code table in orchtool's
   `notes/kabuk-contract-v2.md`): the screen changed, answered already, the agent is gone or not taking input,
   orchd not running, or Kabuk and orch disagree (update one of them). No reply in time → one retry (orchd answers

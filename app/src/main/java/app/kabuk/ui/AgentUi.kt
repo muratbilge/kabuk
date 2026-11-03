@@ -145,7 +145,11 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                         AgentRow(t, a, rows.map { it.first }.distinct().size > 1, q, q?.let { t.answeredWith(a.paneId, it.fingerprint) },
                             onClick = {
                                 TabManager.select(t.id)
-                                t.focusAgent(a) { ok -> if (!ok) TabManager.toast("Couldn't switch to that agent") }
+                                t.focusAgent(a) { ok ->
+                                    if (!ok) TabManager.toast(
+                                        if (a.paneId.startsWith("herdr:")) "${a.place} runs in herdr: switch to it there" else "Couldn't switch to that agent",
+                                    )
+                                }
                                 onDismiss()
                             },
                             onAnswer = { c ->
@@ -304,7 +308,7 @@ private fun NewAgentDialog(known: List<String>, onDismiss: () -> Unit, onStart: 
                         androidx.compose.material3.SuggestionChip(onClick = { dir = s }, label = { Text(s, fontFamily = Mono, maxLines = 1) })
                     }
                 }
-                Text("Starts $tool in that folder's workspace (herdr or orch, as the server starts with).", style = MaterialTheme.typography.bodySmall, color = Muted)
+                Text("Starts $tool in that folder: with orch a new tab in the folder's workspace, with herdr a new workspace.", style = MaterialTheme.typography.bodySmall, color = Muted)
             }
         },
         confirmButton = {
