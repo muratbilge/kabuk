@@ -39,8 +39,11 @@ object Orch {
         val hashes: Map<String, String> = emptyMap(),
     )
 
-    /** what came of an `orch` command, and why, in words safe to log (never the dialog's text) */
-    class Answered(val outcome: AnswerOutcome, val why: String)
+    /**
+     * What came of an `orch` command, and why, in words safe to log (never the dialog's text). [now] is the
+     * dialog found on the screen when it was not the expected one (CHANGED), so the inbox can show it at once.
+     */
+    class Answered(val outcome: AnswerOutcome, val why: String, val now: Pending? = null)
 
     /**
      * What an `orch` exit status means (orchtool's exit-code table, kabuk-contract-v2.md): 0 sent, 10 the screen
@@ -202,20 +205,32 @@ object Orch {
      * instead of reaching the next one.
      */
     fun answerScreen(c: SSHClient, pane: String, key: String, expect: String, stream: Pair<Pending, String>? = null): Answered {
-        val known = stream?.takeIf { it.first.fingerprint == expect }
-        val (now, hash) = known ?: run {
-            val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
-            if (code != 0) return Answered(if (code == null) AnswerOutcome.FAILED else outcomeOf(code), "read failed (exit $code)")
-            val h = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
-                ?: return Answered(AnswerOutcome.FAILED, "no screen hash")
-            val n = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
-            n to h
+        var known = stream?.takeIf { it.first.fingerprint == expect }
+        // orchd compares the whole screen, and Claude Code's screen ticks while a dialog waits (the pending
+        // tool's bullet pulses every second): a refusal as "changed" is retried with a fresh read while the
+        // dialog itself is still the same, a few times
+        for (attempt in 0..2) {
+            val (now, hash) = known ?: run {
+                val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
+                if (code != 0) return Answered(if (code == null) AnswerOutcome.FAILED else outcomeOf(code), "read failed (exit $code)")
+                val h = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
+                    ?: return Answered(AnswerOutcome.FAILED, "no screen hash")
+                val n = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
+                n to h
+            }
+            if (now.fingerprint != expect) return Answered(AnswerOutcome.CHANGED, "dialog changed", now)
+            if (key != ESC && now.choices.none { it.key == key }) return Answered(AnswerOutcome.CHANGED, "choice $key not offered", now)
+            val (sent, retried) = once(c, sendCommand(pane, key, hash), retry = !pane.startsWith("herdr:"))
+            val r = sendOutcome(sent, retried)
+            val via = if (known != null) " (hash from the stream)" else if (attempt > 0) " (read ${attempt + 1}×)" else ""
+            if (r.outcome == AnswerOutcome.CHANGED && !retried && attempt < 2) {
+                KLog.i("AGENT", "screen ticked between read and send$via: reading again")
+                known = null
+                continue
+            }
+            return Answered(r.outcome, r.why + via)
         }
-        if (now.fingerprint != expect) return Answered(AnswerOutcome.CHANGED, "dialog changed")
-        if (key != ESC && now.choices.none { it.key == key }) return Answered(AnswerOutcome.CHANGED, "choice $key not offered")
-        val (sent, retried) = once(c, sendCommand(pane, key, hash), retry = !pane.startsWith("herdr:"))
-        val r = sendOutcome(sent, retried)
-        return if (known != null) Answered(r.outcome, r.why + " (hash from the stream, one call)") else r
+        return Answered(AnswerOutcome.CHANGED, "screen kept changing")
     }
 
     /** answers a bus question (first answer wins): TAKEN when it was answered already (the TUI, the CLI, …) */

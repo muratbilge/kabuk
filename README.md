@@ -6,6 +6,11 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.6 — real Claude Code dialogs.** While a permission box waits, Claude Code pulses the bullet of the pending
+  tool line every second, so the whole-screen hash orchd checks keeps changing and the four lines Kabuk
+  fingerprints could too. The fingerprint now ignores bullets and ticking spinner lines (real screens in the test
+  fixtures `claude-*-box-*.txt`); a send refused as "changed" is retried with a fresh read while the dialog is
+  still the same; after a real change the inbox shows the dialog that is actually on screen at once.
 - **0.5.5 — one orch call per answer.** The watch line carries each blocked pane's screen hash (orchtool
   e3a0257); when the dialog on the phone still matches the stream, the answer is a single `orch send --expect`
   without rereading the pane. Older orch, or a stale dialog: reread as before.

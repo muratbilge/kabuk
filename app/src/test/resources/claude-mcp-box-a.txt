@@ -1,0 +1,16 @@
+ 
+  Calling orch…
+
+───────────────────────────────────────────────────────────────────
+ Tool use 
+ orch — List Agents Tool: (MCP)
+
+ About the orch — List Agents Tool:
+ │ List the agents on the bus (name, kind, status) and your
+ │ own name.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend

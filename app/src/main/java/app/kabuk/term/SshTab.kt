@@ -474,6 +474,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                     .let { why -> Orch.Answered(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED, why ?: "sent") }
             }.getOrElse { Orch.Answered(AnswerOutcome.FAILED, "error: ${it.reason()}") }
             KLog.i("AGENT", "answer $paneId ${if (choice.key == Orch.ESC) "Esc" else choice.key}: ${r.why}")
+            // the screen holds another dialog than the stream last showed (it is up to 15 s behind): show that one
+            r.now?.let { now -> if (usesOrch && questions.value[paneId]?.fingerprint != now.fingerprint) showQuestions(questions.value + (paneId to now)) }
             // certainly not sent: this dialog may be answered again. Unsure (no reply, orch failed, orchd
             // unreachable): orchd refuses a second answer to the same screen itself, so a retap is safe on an
             // orch pane; a herdr pane has no such memory, so the claim stays until the dialog leaves the screen

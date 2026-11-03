@@ -42,18 +42,26 @@ object QuickReplies {
     /** [screen] = visible lines, top to bottom. Returns the menu (2-9 items numbered from 1) or empty. */
     fun find(screenRows: List<String>, lookBack: Int = 24): List<Choice> = scan(screenRows, lookBack).first
 
-    /** the question above a menu in an agent's recent output (from herdr), or null if there is no menu */
+    /** the question above a menu in an agent's recent output (from herdr or orch), or null if there is no menu */
     fun pending(text: String): Pending? {
         val rows = text.lines()
         val (choices, start) = scan(rows, 60)
         if (choices.isEmpty()) return null
-        // up to 4 meaningful lines right above the first option: what is being asked
-        val above = rows.subList(0, start.coerceIn(0, rows.size)).map(::stripBox)
-            .filter { it.isNotBlank() && it.any(Char::isLetterOrDigit) }
+        // up to 4 meaningful lines right above the first option: what is being asked. The fingerprint must not
+        // move while the dialog waits: Claude Code pulses the bullet of the pending tool line ("  Calling orch…"
+        // ↔ "● Calling orch…") and its spinner line counts seconds and tokens, so bullets are dropped and
+        // spinner lines skipped (the real screens are in the test fixtures claude-*-box-*.txt)
+        val above = rows.subList(0, start.coerceIn(0, rows.size)).map(::stripBox).map { it.trimStart(*BULLETS).trim() }
+            .filter { it.isNotBlank() && it.any(Char::isLetterOrDigit) && !spinner.containsMatchIn(it) }
         return Pending(above.takeLast(4).joinToString("\n"), choices)
     }
 
     private fun stripBox(s: String) = s.trim().trimStart(*EDGE).trimEnd(*EDGE).trim().trimStart('╭', '╰').trim()
+
+    /** the bullet or spinner glyph Claude Code and Codex put in front of a transcript line */
+    private val BULLETS = "●○◉⏺✻✽✶✢✣✤✥✦✧·•".toCharArray()
+    /** "Mustering… (11s · ↓ 557 tokens)" / "Working (14s • esc to interrupt)": a status line that ticks */
+    private val spinner = Regex("""\(\d+[smh]\b""")
 
     /** the menu and the row its first option is on */
     private fun scan(screenRows: List<String>, lookBack: Int): Pair<List<Choice>, Int> {

@@ -87,4 +87,29 @@ class QuickRepliesTest {
             assertEquals(f, true, c[0].selected)
         }
     }
+
+    private fun res(n: String) = javaClass.classLoader!!.getResource(n).readText()
+
+    /**
+     * Real Claude Code 2.1 boxes read from an orch pane 3 s apart (2026-11-03): only the pending tool's bullet
+     * pulsed ("  Calling orch…" ↔ "● Calling orch…"), which must not change the dialog's fingerprint.
+     */
+    @Test fun pulsingBulletDoesNotChangeTheFingerprint() {
+        for (kind in listOf("bash", "mcp")) {
+            val a = QuickReplies.pending(res("claude-$kind-box-a.txt"))!!
+            val b = QuickReplies.pending(res("claude-$kind-box-b.txt"))!!
+            assertEquals(kind, a.fingerprint, b.fingerprint)
+            assertEquals("1", a.choices[0].key)
+        }
+        val bash = QuickReplies.pending(res("claude-bash-box-a.txt"))!!
+        assertEquals(listOf("1", "2", "3", "4"), bash.choices.map { it.key })
+        assertTrue(bash.prompt, bash.prompt.endsWith("Do you want to proceed?"))
+        // a short box, where the pulsing line is among the four lines above the menu, and a ticking spinner line
+        val still = "  Calling orch…\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
+        val lit = "● Calling orch…\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
+        val ticking = "● Calling orch…\n✶ Mustering… (13s · ↓ 613 tokens)\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
+        assertEquals(QuickReplies.pending(still)!!.fingerprint, QuickReplies.pending(lit)!!.fingerprint)
+        assertEquals(QuickReplies.pending(lit)!!.fingerprint, QuickReplies.pending(ticking)!!.fingerprint)
+        assertTrue(QuickReplies.pending(lit)!!.prompt.startsWith("Calling orch"))
+    }
 }

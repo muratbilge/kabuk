@@ -92,7 +92,7 @@ class OrchContractTest {
     /** orchtool e3a0257: the screen hash of every blocked pane rides along, so an answer is one call */
     @Test fun screenHashes() {
         val u = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!
-        assertEquals("07af11698155b9c4", u.hashes["orch:p1"])
+        assertEquals("12b96904cdd7c084", u.hashes["orch:p1"])
         assertEquals(u.screens.keys, u.hashes.keys)
         // an orch without the field: no hashes, the answer path rereads the pane
         assertTrue(Orch.parseUpdate("""{"agents":[],"questions":[],"screens":{},"timeline":[]}""")!!.hashes.isEmpty())
