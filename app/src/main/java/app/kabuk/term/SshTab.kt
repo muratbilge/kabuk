@@ -68,6 +68,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
     /** orchtool: a note about the server's orch (newer or older than this app understands), for the agents sheet */
     val orchNote = MutableStateFlow<String?>(null)
+    /** orchtool: each blocked pane's screen hash from the latest watch line (answers need no reread then) */
+    @Volatile private var screenHashes: Map<String, String> = emptyMap()
     /** the server's "Start with" is orch */
     private val orchHost get() = host.session == Host.ORCH
     /**
@@ -402,6 +404,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                         orchNote.value = "orch on ${host.name} is newer than this Kabuk (watch v${u.v}, Kabuk v${Orch.V}): update Kabuk"
                     }
                     agents.value = u?.agents ?: emptyList()
+                    screenHashes = u?.hashes ?: emptyMap()
                     showQuestions(u?.screens ?: emptyMap())
                     busQuestions.value = u?.questions ?: emptyList()
                     timeline.value = u?.timeline ?: emptyList()
@@ -413,6 +416,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             // (AgentNotifier keeps a "needs you" for a grace period, so a short gap doesn't re-alert it; the
             // ledger is kept too, so the same dialog isn't answered again when the stream is back)
             agents.value = emptyList()
+            screenHashes = emptyMap()
             questions.value = emptyMap()
             busQuestions.value = emptyList()
             timeline.value = emptyList()
@@ -463,7 +467,9 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         thread {
             // only the pane and the key are logged, never the dialog's text
             val r = runCatching {
-                if (usesOrch) Orch.answerScreen(c.client, paneId, choice.key, expect)
+                // the dialog and screen hash as the stream last showed them: no reread when they're current
+                val stream = questions.value[paneId]?.let { q -> screenHashes[paneId]?.let { q to it } }
+                if (usesOrch) Orch.answerScreen(c.client, paneId, choice.key, expect, stream)
                 else Herdr.answer(c.client, paneId, choice.key, expect)
                     .let { why -> Orch.Answered(if (why == null) AnswerOutcome.SENT else AnswerOutcome.CHANGED, why ?: "sent") }
             }.getOrElse { Orch.Answered(AnswerOutcome.FAILED, "error: ${it.reason()}") }

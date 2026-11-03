@@ -35,6 +35,8 @@ object Orch {
         /** the line's format version and the server's orch version ("" before orchtool 0.1.1) */
         val v: Int = V,
         val orch: String = "",
+        /** each blocked pane's screen hash (what `orch read --hash --lines 60` would print), by pane; empty before orchtool e3a0257 */
+        val hashes: Map<String, String> = emptyMap(),
     )
 
     /** what came of an `orch` command, and why, in words safe to log (never the dialog's text) */
@@ -80,6 +82,8 @@ object Orch {
         o.optJSONObject("screens")?.let { s ->
             s.keys().forEach { pane -> QuickReplies.pending(s.getString(pane))?.let { screens[pane] = it } }
         }
+        val hashes = HashMap<String, String>()
+        o.optJSONObject("hashes")?.let { h -> h.keys().forEach { pane -> h.optString(pane).takeIf { it.isNotBlank() }?.let { hashes[pane] = it } } }
         val qs = o.optJSONArray("questions") ?: JSONArray()
         val questions = List(qs.length()) { i ->
             val q = qs.getJSONObject(i)
@@ -93,7 +97,7 @@ object Orch {
             BusMessage(m.getLong("id"), m.optLong("ts_ms"), m.optString("from"), m.optString("to"),
                 m.optString("kind"), m.optString("text"))
         }
-        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"))
+        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"), hashes)
     }
 
     /** runs `orch watch` until the connection ends or [active] turns false; UNAVAILABLE when orch isn't installed */
@@ -190,21 +194,28 @@ object Orch {
     }
 
     /**
-     * Answers a dialog on an agent's screen (approval menu). Rereads the pane first and only sends when the same
-     * question is still open ([expect] = its fingerprint), so a late tap can't answer a newer one; orchd then
-     * sends only if the screen is still exactly what was read, and answers each screen once, so a second
-     * phone/TUI answering the same dialog is refused instead of reaching the next one.
+     * Answers a dialog on an agent's screen (approval menu). Only sends when the same question is still open
+     * ([expect] = its fingerprint), so a late tap can't answer a newer one: from [stream], the dialog and its
+     * screen hash as the watch stream last reported them (one orch call), else after rereading the pane (an
+     * older orch without `hashes`, or a stale [expect]). orchd then sends only if the screen is still exactly
+     * that text, and answers each screen once, so a second phone/TUI answering the same dialog is refused
+     * instead of reaching the next one.
      */
-    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String): Answered {
-        val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
-        if (code != 0) return Answered(if (code == null) AnswerOutcome.FAILED else outcomeOf(code), "read failed (exit $code)")
-        val hash = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
-            ?: return Answered(AnswerOutcome.FAILED, "no screen hash")
-        val now = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
+    fun answerScreen(c: SSHClient, pane: String, key: String, expect: String, stream: Pair<Pending, String>? = null): Answered {
+        val known = stream?.takeIf { it.first.fingerprint == expect }
+        val (now, hash) = known ?: run {
+            val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 60 --hash", timeoutS = 8)
+            if (code != 0) return Answered(if (code == null) AnswerOutcome.FAILED else outcomeOf(code), "read failed (exit $code)")
+            val h = out.lineSequence().firstOrNull()?.removePrefix("hash:")?.takeIf { it.isNotBlank() && it.length <= 32 }
+                ?: return Answered(AnswerOutcome.FAILED, "no screen hash")
+            val n = QuickReplies.pending(out.substringAfter('\n')) ?: return Answered(AnswerOutcome.CHANGED, "no dialog on screen")
+            n to h
+        }
         if (now.fingerprint != expect) return Answered(AnswerOutcome.CHANGED, "dialog changed")
         if (key != ESC && now.choices.none { it.key == key }) return Answered(AnswerOutcome.CHANGED, "choice $key not offered")
         val (sent, retried) = once(c, sendCommand(pane, key, hash), retry = !pane.startsWith("herdr:"))
-        return sendOutcome(sent, retried)
+        val r = sendOutcome(sent, retried)
+        return if (known != null) Answered(r.outcome, r.why + " (hash from the stream, one call)") else r
     }
 
     /** answers a bus question (first answer wins): TAKEN when it was answered already (the TUI, the CLI, …) */

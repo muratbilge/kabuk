@@ -6,6 +6,9 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.5 — one orch call per answer.** The watch line carries each blocked pane's screen hash (orchtool
+  e3a0257); when the dialog on the phone still matches the stream, the answer is a single `orch send --expect`
+  without rereading the pane. Older orch, or a stale dialog: reread as before.
 - **0.5.4 — fixes from orchtool's review of Kabuk.** The orch TUI and agents started from the phone run through a
   login shell (real PATH and profile). A herdr pane's dialog is never retried (no answered-once memory there); a
   screen that changed after a silent try is "Unsure", not "changed"; the answer ledger survives stream gaps and is
