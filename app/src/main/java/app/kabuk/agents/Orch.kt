@@ -15,6 +15,28 @@ data class BusQuestion(val id: Long, val from: String, val text: String, val opt
 /** One row of the orchtool timeline: messages between agents and you, questions, answers. */
 data class BusMessage(val id: Long, val tsMs: Long, val from: String, val to: String, val kind: String, val text: String)
 
+/** A tab of an orchtool workspace, known by its id (a tab closed meanwhile can't shift a tap onto another). */
+data class WsTab(
+    val index: Int, val id: String, val label: String,
+    /** the panes in it (`orch:pN`) and the focused one ("" when none) */
+    val panes: List<String>, val focus: String, val zoomed: Boolean,
+    /** the most urgent agent status inside: blocked, working, idle; "" without an agent */
+    val status: String,
+)
+
+/** An orchtool workspace as `orch watch` lists it (in orchd's order), for the native workspace bar. */
+data class Workspace(
+    val id: String, val number: Int, val label: String, val cwd: String,
+    /** the most urgent agent status inside: blocked, working, idle; "" without an agent */
+    val status: String,
+    /** on screen in the TUI (the last raise; the TUI raises on its own switches, so this follows it) */
+    val shown: Boolean,
+    val activeTab: Int, val tabs: List<WsTab>,
+) {
+    /** "notes-app", or the folder's name when the workspace has no label */
+    val place get() = label.ifBlank { cwd.substringAfterLast('/').ifBlank { cwd } }
+}
+
 /**
  * Talks to orchtool (`orch`, the herdr replacement) over SSH. Agents, their dialogs, your questions and the
  * timeline come live from `orch watch --json`; actions are single `orch` commands.
@@ -37,6 +59,8 @@ object Orch {
         val orch: String = "",
         /** each blocked pane's screen hash (what `orch read --hash --lines 60` would print), by pane; empty before orchtool e3a0257 */
         val hashes: Map<String, String> = emptyMap(),
+        /** the layout for the workspace bar; empty before orchtool 1f30b5f */
+        val workspaces: List<Workspace> = emptyList(),
     )
 
     /**
@@ -100,8 +124,26 @@ object Orch {
             BusMessage(m.getLong("id"), m.optLong("ts_ms"), m.optString("from"), m.optString("to"),
                 m.optString("kind"), m.optString("text"))
         }
-        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"), hashes)
+        val ws = o.optJSONArray("workspaces") ?: JSONArray()
+        val workspaces = List(ws.length()) { i ->
+            val w = ws.getJSONObject(i)
+            val tabs = w.optJSONArray("tabs") ?: JSONArray()
+            Workspace(
+                id = w.optString("id"), number = w.optInt("number", i + 1), label = w.optString("label"), cwd = w.optString("cwd"),
+                status = text(w, "status"), shown = w.optBoolean("shown"), activeTab = w.optInt("active_tab"),
+                tabs = List(tabs.length()) { j ->
+                    val t = tabs.getJSONObject(j)
+                    val panes = t.optJSONArray("panes") ?: JSONArray()
+                    WsTab(t.optInt("index", j), t.optString("id"), t.optString("label"), List(panes.length()) { panes.getString(it) },
+                        text(t, "focus"), t.optBoolean("zoomed"), text(t, "status"))
+                },
+            )
+        }
+        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"), hashes, workspaces)
     }
+
+    /** a string field that may be JSON null: "" then (org.json's optString would say "null") */
+    private fun text(o: JSONObject, key: String): String = if (o.isNull(key)) "" else o.optString(key)
 
     /** runs `orch watch` until the connection ends or [active] turns false; UNAVAILABLE when orch isn't installed */
     fun stream(c: SSHClient, active: () -> Boolean, onUpdate: (Update?) -> Unit): Herdr.StreamEnd {
@@ -245,18 +287,73 @@ object Orch {
 
     /** [tool] (claude, codex) in a new orch pane in [dir] (its folder's workspace), brought on screen */
     fun startAgent(c: SSHClient, dir: String, tool: String): Boolean {
-        val cwd = if (dir == "~" || dir.startsWith("~/")) "\"\$HOME\"" + shellQuote(dir.removePrefix("~")) else shellQuote(dir)
-        // run through a login shell (bash, zsh or fish alike: it only execs sh with the real command), so the
-        // agent gets the user's real environment (PATH, JAVA_HOME, …), not the bare one of an SSH exec channel
-        val inner = "cd $cwd 2>/dev/null || exit 4; P=\$(\"\$O\" new --cwd \"\$PWD\" -- ${shellQuote(tool)}) || exit 1; \"\$O\" focus \"\$P\""
-        val (code, _) = SshTab.exec(
-            c, FIND + "export O; KABUK_CMD=${shellQuote(inner)}; export KABUK_CMD; " +
-                "exec \"\${SHELL:-/bin/sh}\" -lc 'exec sh -c \"\$KABUK_CMD\"'",
-            timeoutS = 15,
-        )
+        val code = plain(c, viaLogin(cdInto(dir) + "P=\$(\"\$O\" new --cwd \"\$PWD\" -- ${shellQuote(tool)}) || exit 1; \"\$O\" focus \"\$P\""), 15)
         if (code == 4) throw java.io.FileNotFoundException(dir)
         return code == 0
     }
+
+    /**
+     * [inner] (it may use `$O`, the orch binary) run through the user's login shell (bash, zsh or fish alike: it
+     * only execs sh with the real command), so a program started from it gets the user's real environment
+     * (PATH, JAVA_HOME, …), not the bare one of an SSH exec channel.
+     */
+    private fun viaLogin(inner: String): String =
+        FIND + "export O; KABUK_CMD=${shellQuote(inner)}; export KABUK_CMD; exec \"\${SHELL:-/bin/sh}\" -lc 'exec sh -c \"\$KABUK_CMD\"'"
+
+    /** `cd` into [dir] (~ allowed); exit 4 when there is no such folder */
+    private fun cdInto(dir: String): String {
+        val cwd = if (dir == "~" || dir.startsWith("~/")) "\"\$HOME\"" + shellQuote(dir.removePrefix("~")) else shellQuote(dir)
+        return "cd $cwd 2>/dev/null || exit 4; "
+    }
+
+    /** runs a command once; its exit status, or null when orch gave no reply in time (never retried: `new` and `close` must not run twice) */
+    private fun plain(c: SSHClient, cmd: String, timeoutS: Long = 8): Int? = try {
+        SshTab.exec(c, cmd, timeoutS = timeoutS).first
+    } catch (e: java.io.IOException) {
+        if (e.message.orEmpty().contains("took longer")) null else throw e
+    }
+
+    // ---------------------------------------------------------------- workspaces and tabs (the native workspace bar)
+
+    /** an `orch` command as text, every argument quoted (testable) */
+    internal fun orchCommand(vararg args: String): String = FIND + "\"\$O\"" + args.joinToString("") { " " + shellQuote(it) }
+
+    /** a new tab in workspace [ws] (its folder) with [tool] (claude, codex; "" = a shell), brought on screen; 14 = the workspace is gone */
+    internal fun newTabCommand(ws: String, tool: String): String =
+        viaLogin("P=\$(\"\$O\" tab new ${shellQuote(ws)}${if (tool.isBlank()) "" else " -- ${shellQuote(tool)}"}) || exit \$?; \"\$O\" focus \"\$P\"")
+
+    /** a new workspace in [dir] (named [label], or after the folder) with [tool] ("" = a shell), brought on screen; 4 = no such folder */
+    internal fun newWorkspaceCommand(dir: String, label: String, tool: String): String = viaLogin(
+        cdInto(dir) + "P=\$(\"\$O\" ws new --cwd \"\$PWD\"" + (if (label.isBlank()) "" else " --label ${shellQuote(label)}") +
+            (if (tool.isBlank()) "" else " -- ${shellQuote(tool)}") + ") || exit \$?; \"\$O\" focus \"\$P\"",
+    )
+
+    /**
+     * What a layout command's exit status means, in words for a toast; null = done. 14 is the one outcome of its
+     * own (the workspace or tab was closed meanwhile: the tap landed on nothing, which is what tabs-by-id are for).
+     */
+    fun layoutError(exit: Int?, what: String): String? = when (exit) {
+        0 -> null
+        14 -> "That $what is gone"
+        4 -> "There is no such folder on the server"
+        2 -> "orch on the server has no workspace commands (too old for this Kabuk): update orchtool"
+        20, 3 -> "Couldn't reach orchd"
+        null -> "No reply from orch"
+        else -> "orch failed (exit $exit)"
+    }
+
+    /** shows a workspace in the TUI (its focused pane) */
+    fun focusWorkspace(c: SSHClient, ws: String): Int? = plain(c, orchCommand("ws", "focus", ws))
+    fun renameWorkspace(c: SSHClient, ws: String, label: String): Int? = plain(c, orchCommand("ws", "rename", ws, "--", label))
+    /** kills every pane in it */
+    fun closeWorkspace(c: SSHClient, ws: String): Int? = plain(c, orchCommand("ws", "close", ws))
+    fun newWorkspace(c: SSHClient, dir: String, label: String, tool: String): Int? = plain(c, newWorkspaceCommand(dir, label, tool), 15)
+    /** shows a tab (and its workspace) in the TUI */
+    fun focusTab(c: SSHClient, ws: String, tab: String): Int? = plain(c, orchCommand("tab", "focus", ws, tab))
+    fun renameTab(c: SSHClient, ws: String, tab: String, label: String): Int? = plain(c, orchCommand("tab", "rename", ws, tab, "--", label))
+    /** kills its panes */
+    fun closeTab(c: SSHClient, ws: String, tab: String): Int? = plain(c, orchCommand("tab", "close", ws, tab))
+    fun newTab(c: SSHClient, ws: String, tool: String): Int? = plain(c, newTabCommand(ws, tool), 15)
 
     /** brings an agent's orch pane on screen in the TUI (agents in herdr panes can't be switched to from here) */
     fun focus(c: SSHClient, a: Agent): Boolean =

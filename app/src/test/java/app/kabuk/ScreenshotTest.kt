@@ -3,6 +3,7 @@ package app.kabuk
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
@@ -169,6 +170,34 @@ $E[38;5;208m╰─────────────────────�
         compose.mainClock.advanceTimeBy(1000); compose.waitForIdle()
         compose.onRoot().captureRoboImage("build/outputs/roborazzi/quick.png")
         TabManager.closeAll()
+    }
+
+    /** the native workspace bar of an orch server: kabuk on screen with its three tabs, the others waiting */
+    @Test fun workspaceBar() {
+        fun tab(i: Int, id: String, label: String, pane: String, st: String = "") =
+            app.kabuk.agents.WsTab(i, id, label, listOf(pane), pane, false, st)
+        val ws = listOf(
+            app.kabuk.agents.Workspace("w1", 1, "murat", "/home/murat", "", false, 0, listOf(tab(0, "t1", "1", "orch:p1"))),
+            app.kabuk.agents.Workspace("w2", 2, "kabuk", "/projects/kabuk", "blocked", true, 1, listOf(
+                tab(0, "t2", "1", "orch:p2", "blocked"), tab(1, "t3", "2", "orch:p3"), tab(2, "t4", "tests", "orch:p4", "working"),
+            )),
+            app.kabuk.agents.Workspace("w3", 3, "orchtool", "/projects/orchtool", "working", false, 0, listOf(tab(0, "t5", "1", "orch:p5", "working"))),
+            app.kabuk.agents.Workspace("w4", 4, "", "/docker/webshop", "idle", false, 0, listOf(tab(0, "t6", "1", "orch:p6", "idle"), tab(1, "t7", "2", "orch:p7"))),
+        )
+        val agents = listOf(
+            app.kabuk.agents.Agent("orch:p2", "orch:p2", "claude", "blocked", "/projects/kabuk", "kabuk", 2, true),
+            app.kabuk.agents.Agent("orch:p4", "orch:p4", "codex", "working", "/projects/kabuk", "kabuk", 2, false),
+        )
+        compose.setContent {
+            KabukTheme {
+                Box(Modifier.fillMaxWidth().background(Bg)) {
+                    app.kabuk.ui.WorkspaceBarContent(ws, agents, app.kabuk.ui.WsActions())
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1000); compose.waitForIdle()
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/workspace-bar.png")
     }
 
     @Test fun hosts() {

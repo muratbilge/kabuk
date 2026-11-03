@@ -6,6 +6,12 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.7 — native workspace bar.** On an orch server a slim bar under the tab strip shows orchd's workspaces as
+  chips (the agents' most urgent status as a dot, the one on screen in the TUI lit) with that workspace's tabs after
+  it; tap = show it in the TUI (`orch ws focus`, `orch tab focus`), long-press = new tab (shell, Claude, Codex),
+  rename, close (confirmed: closing kills the panes), + = a new workspace in a folder. The layout comes with the
+  watch line (`workspaces`, orchtool 1f30b5f); tabs are addressed by id, so a tab closed meanwhile is "gone" (exit
+  14), never another tab. Hidden on herdr servers and while orchd is down.
 - **0.5.6 — real Claude Code dialogs.** While a permission box waits, Claude Code pulses the bullet of the pending
   tool line every second, so the whole-screen hash orchd checks keeps changing and the four lines Kabuk
   fingerprints could too. The fingerprint now ignores bullets and ticking spinner lines (real screens in the test

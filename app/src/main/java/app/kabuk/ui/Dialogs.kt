@@ -76,12 +76,12 @@ fun PromptDialog(p: Prompt) {
 }
 
 @Composable
-fun RenameDialog(current: String, onDone: (String?) -> Unit) {
+fun RenameDialog(current: String, onDone: (String?) -> Unit, title: String = "Rename tab", hint: String = "empty = automatic") {
     var name by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = { onDone(null) },
-        title = { Text("Rename tab") },
-        text = { OutlinedTextField(name, { name = it }, singleLine = true, placeholder = { Text("empty = automatic") }) },
+        title = { Text(title) },
+        text = { OutlinedTextField(name, { name = it }, singleLine = true, placeholder = { Text(hint) }) },
         confirmButton = { TextButton(onClick = { onDone(name.trim()) }) { Text("OK") } },
         dismissButton = { TextButton(onClick = { onDone(null) }) { Text("Cancel") } },
     )

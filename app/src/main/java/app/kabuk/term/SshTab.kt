@@ -66,6 +66,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     /** orchtool backend: questions agents asked you on the bus, and the timeline (empty with herdr) */
     val busQuestions = MutableStateFlow<List<app.kabuk.agents.BusQuestion>>(emptyList())
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
+    /** orchtool: the server's workspaces and their tabs, for the workspace bar (empty with herdr, or while the stream is down) */
+    val workspaces = MutableStateFlow<List<app.kabuk.agents.Workspace>>(emptyList())
     /** orchtool: a note about the server's orch (newer or older than this app understands), for the agents sheet */
     val orchNote = MutableStateFlow<String?>(null)
     /** orchtool: each blocked pane's screen hash from the latest watch line (answers need no reread then) */
@@ -408,6 +410,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                     showQuestions(u?.screens ?: emptyMap())
                     busQuestions.value = u?.questions ?: emptyList()
                     timeline.value = u?.timeline ?: emptyList()
+                    workspaces.value = u?.workspaces ?: emptyList()
                     TabManager.agentsChanged(this)
                 }
             }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
@@ -420,6 +423,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             questions.value = emptyMap()
             busQuestions.value = emptyList()
             timeline.value = emptyList()
+            workspaces.value = emptyList()
             orchNote.value = null
             TabManager.agentsChanged(this)
             when (end) {
@@ -509,6 +513,20 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             } catch (e: Exception) {
                 "Couldn't start $tool: ${e.message}"
             }
+            TabManager.main.post { done(err) }
+        }
+    }
+
+    /**
+     * Runs a workspace-bar command (`orch ws`/`orch tab`, [cmd] gives its exit status) on this connection;
+     * done(null) = done, else what went wrong in words. [action] names it in the log (ids only, never a label).
+     */
+    fun layout(action: String, what: String, cmd: (SSHClient) -> Int?, done: (String?) -> Unit) {
+        val c = conn ?: return done("Not connected")
+        if (!usesOrch) return done("No orchtool on ${host.name}")
+        thread {
+            val err = runCatching { Orch.layoutError(cmd(c.client), what) }.getOrElse { "orch failed: ${it.reason()}" }
+            KLog.i("AGENT", "$action: ${err ?: "ok"}")
             TabManager.main.post { done(err) }
         }
     }

@@ -191,6 +191,8 @@ fun TerminalScreen(
     ui.available = maxHeight
     Column(Modifier.fillMaxSize()) {
         TabStrip(tabs, tab, onOpenHosts, onOpenSettings, ui, onTextMode)
+        // orch servers: their workspaces and tabs as native chips (hidden while the stream has none)
+        if (tab is SshTab) WorkspaceBar(tab)
         Box(Modifier.weight(1f).fillMaxWidth().background(Bg)) {
             AndroidView(factory = { ui.view }, modifier = Modifier.fillMaxSize())
             androidx.compose.material3.SnackbarHost(Snack.host, Modifier.align(Alignment.BottomCenter))

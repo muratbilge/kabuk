@@ -4,6 +4,7 @@ import app.kabuk.agents.AnswerOutcome
 import app.kabuk.agents.Orch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -96,5 +97,69 @@ class OrchContractTest {
         assertEquals(u.screens.keys, u.hashes.keys)
         // an orch without the field: no hashes, the answer path rereads the pane
         assertTrue(Orch.parseUpdate("""{"agents":[],"questions":[],"screens":{},"timeline":[]}""")!!.hashes.isEmpty())
+    }
+
+    /** orchtool 1f30b5f: the layout rides along for the native workspace bar; tabs are known by id */
+    @Test fun workspaces() {
+        val u = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!
+        val w = u.workspaces.single()
+        assertEquals("w1", w.id)
+        assertEquals(1, w.number)
+        assertEquals("webshop", w.label)
+        assertEquals("webshop", w.place)
+        assertEquals("blocked", w.status)
+        assertTrue(w.shown)
+        assertEquals(0, w.activeTab)
+        val t = w.tabs.single()
+        assertEquals("t1", t.id)
+        assertEquals(0, t.index)
+        assertEquals(listOf("orch:p1"), t.panes)
+        assertEquals("orch:p1", t.focus)
+        assertEquals("blocked", t.status)
+        assertFalse(t.zoomed)
+        // the agent in that tab is the one the stream lists
+        assertEquals(u.agents.single().paneId, t.focus)
+        // an orch without the field: no bar
+        assertTrue(Orch.parseUpdate("""{"agents":[],"questions":[],"screens":{},"timeline":[]}""")!!.workspaces.isEmpty())
+        // null status and focus (no agent, an empty tab) are "", never the string "null"; no label = the folder's name
+        val bare = Orch.parseUpdate(
+            """{"v":1,"agents":[],"questions":[],"screens":{},"timeline":[],"workspaces":[{"id":"w2","number":1,"label":"",""" +
+                """"cwd":"/home/x/proj","status":null,"shown":false,"active_tab":0,"tabs":[{"index":0,"id":"t3","label":"1",""" +
+                """"panes":[],"focus":null,"zoomed":false,"status":null}]}]}""",
+        )!!.workspaces.single()
+        assertEquals("", bare.status)
+        assertEquals("proj", bare.place)
+        assertEquals("", bare.tabs.single().focus)
+        assertEquals("", bare.tabs.single().status)
+    }
+
+    /**
+     * The layout commands as sent, through a real sh against a fake orch: a label with spaces stays one argument,
+     * exit 14 (gone) reaches Kabuk, `new` runs through the login shell, focuses the pane it printed and passes
+     * orch's own code on, and a missing folder is the wrapper's 4.
+     */
+    @Test fun layoutCommands() {
+        val home = createTempDir()
+        File(home, ".local/bin").mkdirs()
+        val orch = File(home, ".local/bin/orch")
+        orch.writeText(
+            "#!/bin/sh\n" +
+                "if [ \"\$1\" = tab ] && [ \"\$2\" = rename ]; then [ \"\$3\" = w1 ] && [ \"\$4\" = t1 ] && [ \"\$5\" = -- ] && [ \"\$6\" = 'my tab' ] && [ \$# = 6 ] || exit 99; exit 14; fi\n" +
+                "if [ \"\$1\" = tab ] && [ \"\$2\" = new ]; then [ \"\$3\" = w1 ] && [ \"\$4\" = -- ] && [ \"\$5\" = claude ] && [ \$# = 5 ] || exit 99; echo p9; exit 0; fi\n" +
+                "if [ \"\$1\" = ws ] && [ \"\$2\" = new ]; then [ \"\$3\" = --cwd ] && [ \"\$4\" = \"\$HOME\" ] && [ \"\$5\" = --label ] && [ \"\$6\" = 'my ws' ] && [ \$# = 6 ] || exit 99; exit 14; fi\n" +
+                "if [ \"\$1\" = focus ]; then [ \"\$2\" = p9 ] || exit 98; exit 0; fi\n" +
+                "exit 97\n",
+        )
+        orch.setExecutable(true)
+        assertEquals(14, sh(Orch.orchCommand("tab", "rename", "w1", "t1", "--", "my tab"), home))
+        assertEquals(97, sh(Orch.orchCommand("tab", "close", "w1", "t1"), home))
+        assertEquals(0, sh(Orch.newTabCommand("w1", "claude"), home))
+        assertEquals(14, sh(Orch.newWorkspaceCommand(home.absolutePath, "my ws", ""), home))
+        assertEquals(4, sh(Orch.newWorkspaceCommand(File(home, "no-such-folder").absolutePath, "", "codex"), home))
+        assertEquals("That tab is gone", Orch.layoutError(14, "tab"))
+        assertEquals("There is no such folder on the server", Orch.layoutError(4, "folder"))
+        assertNull(Orch.layoutError(0, "workspace"))
+        assertEquals("No reply from orch", Orch.layoutError(null, "workspace"))
+        home.deleteRecursively()
     }
 }
