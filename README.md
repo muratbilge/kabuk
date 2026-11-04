@@ -6,9 +6,9 @@ better keyboard input, copy and tabs. On top of the terminal there is an agents 
 their permission dialogs and the questions they ask you, and the server's workspaces, live on the phone and
 answerable from a notification.
 
-The agents layer talks to **orchtool** (`orchd` + `orch`: panes, workspaces and an agent bus for Claude Code and
-Codex; not public yet) and falls back to **herdr**, which orchtool replaces. Without either, Kabuk is a good
-terminal with tmux sessions that survive the connection.
+The agents layer talks to [**orchtool**](https://github.com/muratbilge/orchtool) (`orchd` + `orch`: panes,
+workspaces and an agent bus for Claude Code and Codex) and falls back to **herdr**, which orchtool replaces.
+Without either, Kabuk is a good terminal with tmux sessions that survive the connection.
 
 <p align="center">
   <img src="docs/screenshots/approval.png" width="230" alt="A Claude Code permission dialog; its answers are one tap away in the key bar">
@@ -34,7 +34,7 @@ terminal with tmux sessions that survive the connection.
   only if the screen still shows what the phone read, and answers each dialog once, so a second phone or the TUI
   can't answer it again. Every outcome comes back in words: sent, the screen changed, answered already, the agent
   is gone or not taking input, orchd not running, or Kabuk and orch disagree (update one of them). The contract
-  with orchtool, its exit codes and the shared fixture are tested in `OrchContractTest`.
+  with orchtool (its `notes/kabuk-contract-v2.md`), the exit codes and the shared fixture are tested in `OrchContractTest`.
 - **Notifications.** "claude needs you · notes-app" with up to three answer buttons (unlock required), one
   notification per bus question with the agent's options, and an optional "finished". Tapping one opens that
   agent. Works with the screen off, because a foreground service keeps the connection alive.
