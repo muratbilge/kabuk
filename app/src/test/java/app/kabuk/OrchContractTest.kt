@@ -93,10 +93,35 @@ class OrchContractTest {
     /** orchtool e3a0257: the screen hash of every blocked pane rides along, so an answer is one call */
     @Test fun screenHashes() {
         val u = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!
-        assertEquals("12b96904cdd7c084", u.hashes["orch:p1"])
+        // orchtool 054d83c: the hash is over the normalized screen text
+        assertEquals("31e4558739b0108e", u.hashes["orch:p1"])
         assertEquals(u.screens.keys, u.hashes.keys)
         // an orch without the field: no hashes, the answer path rereads the pane
         assertTrue(Orch.parseUpdate("""{"agents":[],"questions":[],"screens":{},"timeline":[]}""")!!.hashes.isEmpty())
+    }
+
+    /** contract §2, since orchtool 7c47764: an agent paused on its usage limit, and orchd's per-pane auto-continue switch */
+    @Test fun limitedAgent() {
+        val line = """{"v":1,"human":"murat","agents":[{"name":"kabuk-codex","kind":"codex","status":"limited","status_text":"usage limit · continues 08:54",""" +
+            """"pane":"orch:p3","cwd":"/w","workspace":"w","workspace_number":1,"focused":false,"seen_ms":null,"registered":true,""" +
+            """"limit_reset":1762243980000,"auto_continue":true}],"questions":[],"screens":{},"timeline":[]}"""
+        val a = Orch.parseUpdate(line)!!.agents.single()
+        assertTrue(a.limited)
+        assertFalse(a.needsYou || a.working || a.resting)
+        assertEquals(1762243980000L, a.limitReset)
+        assertEquals("orchd continues a minute after the reset", 1762244040000L, a.resumesAt)
+        assertTrue(a.autoContinue)
+        assertEquals("usage limit · continues 08:54", a.statusText)
+        // switched off, and no reset time on its screen
+        val off = Orch.parseUpdate(line.replace("\"auto_continue\":true", "\"auto_continue\":false").replace("1762243980000", "null"))!!.agents.single()
+        assertFalse(off.autoContinue)
+        assertEquals(0L, off.limitReset)
+        assertEquals(0L, off.resumesAt)
+        // an orch from before the fields (the fixture): not paused, auto-continue on
+        val old = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!.agents.single()
+        assertFalse(old.limited)
+        assertEquals(0L, old.limitReset)
+        assertTrue(old.autoContinue)
     }
 
     /** orchtool 1f30b5f: the layout rides along for the native workspace bar; tabs are known by id */
@@ -148,6 +173,9 @@ class OrchContractTest {
                 "if [ \"\$1\" = tab ] && [ \"\$2\" = new ]; then [ \"\$3\" = w1 ] && [ \"\$4\" = -- ] && [ \"\$5\" = claude ] && [ \$# = 5 ] || exit 99; echo p9; exit 0; fi\n" +
                 "if [ \"\$1\" = ws ] && [ \"\$2\" = new ]; then [ \"\$3\" = --cwd ] && [ \"\$4\" = \"\$HOME\" ] && [ \"\$5\" = --label ] && [ \"\$6\" = 'my ws' ] && [ \$# = 6 ] || exit 99; exit 14; fi\n" +
                 "if [ \"\$1\" = focus ]; then [ \"\$2\" = p9 ] || exit 98; exit 0; fi\n" +
+                "if [ \"\$1\" = auto-continue ]; then [ \"\$2\" = orch:p3 ] && [ \"\$3\" = off ] && [ \$# = 3 ] || exit 99; exit 0; fi\n" +
+                "if [ \"\$1\" = question ] && [ \"\$2\" = close ]; then [ \"\$3\" = 7 ] && [ \$# = 3 ] || exit 99; exit 11; fi\n" +
+                "if [ \"\$1\" = read ]; then [ \"\$2\" = orch:p3 ] && [ \"\$3\" = --unwrapped ] && [ \"\$4\" = --lines ] && [ \"\$5\" = 4000 ] && [ \$# = 5 ] || exit 99; exit 0; fi\n" +
                 "exit 97\n",
         )
         orch.setExecutable(true)
@@ -156,6 +184,13 @@ class OrchContractTest {
         assertEquals(0, sh(Orch.newTabCommand("w1", "claude"), home))
         assertEquals(14, sh(Orch.newWorkspaceCommand(home.absolutePath, "my ws", ""), home))
         assertEquals(4, sh(Orch.newWorkspaceCommand(File(home, "no-such-folder").absolutePath, "", "codex"), home))
+        // orchtool 7c47764 (contract §8): the pause switch, dismissing a question, the unwrapped copy (a herdr pane as it is)
+        assertEquals(0, sh(Orch.orchCommand("auto-continue", "orch:p3", "off"), home))
+        assertEquals(11, sh(Orch.orchCommand("question", "close", "7"), home))
+        assertEquals(0, sh(Orch.readCommand("orch:p3", true), home))
+        assertFalse(Orch.readCommand("herdr:abc", false).contains("--unwrapped"))
+        assertEquals("That question was answered already", Orch.layoutError(11, "question"))
+        assertEquals("That question is gone", Orch.layoutError(14, "question"))
         assertEquals("That tab is gone", Orch.layoutError(14, "tab"))
         assertEquals("There is no such folder on the server", Orch.layoutError(4, "folder"))
         assertNull(Orch.layoutError(0, "workspace"))

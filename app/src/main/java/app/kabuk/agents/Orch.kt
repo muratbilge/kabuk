@@ -103,6 +103,8 @@ object Orch {
                 workspaceNumber = a.optInt("workspace_number"), focused = a.optBoolean("focused"),
                 bus = bus, statusText = if (a.isNull("status_text")) "" else a.optString("status_text"),
                 registered = a.optBoolean("registered", true),
+                limitReset = if (a.isNull("limit_reset")) 0L else a.optLong("limit_reset"),
+                autoContinue = a.optBoolean("auto_continue", true),
             )
         }
         val screens = HashMap<String, Pending>()
@@ -329,14 +331,16 @@ object Orch {
     )
 
     /**
-     * What a layout command's exit status means, in words for a toast; null = done. 14 is the one outcome of its
-     * own (the workspace or tab was closed meanwhile: the tap landed on nothing, which is what tabs-by-id are for).
+     * What a plain command's exit status means (`orch ws`/`tab`, `question close`, `auto-continue`), in words for
+     * a toast; null = done. 14 is the one outcome of its own (the workspace, tab, agent or question went away
+     * meanwhile: the tap landed on nothing, which is what ids are for); 11 a question someone answered first.
      */
     fun layoutError(exit: Int?, what: String): String? = when (exit) {
         0 -> null
         14 -> "That $what is gone"
+        11 -> "That $what was answered already"
         4 -> "There is no such folder on the server"
-        2 -> "orch on the server has no workspace commands (too old for this Kabuk): update orchtool"
+        2 -> "orch on the server doesn't know that command (too old for this Kabuk): update orchtool"
         20, 3 -> "Couldn't reach orchd"
         null -> "No reply from orch"
         else -> "orch failed (exit $exit)"
@@ -355,14 +359,29 @@ object Orch {
     fun closeTab(c: SSHClient, ws: String, tab: String): Int? = plain(c, orchCommand("tab", "close", ws, tab))
     fun newTab(c: SSHClient, ws: String, tool: String): Int? = plain(c, newTabCommand(ws, tool), 15)
 
+    // ---------------------------------------------------------------- paused agents and questions (orchtool 7c47764)
+
+    /** `orch auto-continue <pane> on|off`: whether orchd types "continue" into [pane] a minute after its usage limit resets; 14 = no such pane */
+    fun autoContinue(c: SSHClient, pane: String, on: Boolean): Int? = plain(c, orchCommand("auto-continue", pane, if (on) "on" else "off"))
+
+    /** `orch question close <id>`: dismisses a bus question unanswered (the asker's wait ends); 14 = gone, 11 = answered already */
+    fun closeQuestion(c: SSHClient, id: Long): Int? = plain(c, orchCommand("question", "close", id.toString()))
+
     /** brings an agent's orch pane on screen in the TUI (agents in herdr panes can't be switched to from here) */
     fun focus(c: SSHClient, a: Agent): Boolean =
         a.paneId.startsWith("orch:") &&
             SshTab.exec(c, FIND + "\"\$O\" focus ${shellQuote(a.paneId)}", timeoutS = 8).first == 0
 
+    /** `orch read` for "Copy text…": an orch pane with its soft-wrapped rows joined into real lines ([unwrapped], orchtool 7c47764), a herdr pane as it is */
+    internal fun readCommand(pane: String, unwrapped: Boolean): String =
+        FIND + "\"\$O\" read ${shellQuote(pane)}" + (if (unwrapped) " --unwrapped" else "") + " --lines 4000"
+
     /** the whole recent text of a pane (orch or herdr), for "Copy text…" */
     fun read(c: SSHClient, pane: String): String? {
-        val (code, out) = SshTab.exec(c, FIND + "\"\$O\" read ${shellQuote(pane)} --lines 4000", timeoutS = 15)
+        val unwrapped = pane.startsWith("orch:")
+        var (code, out) = SshTab.exec(c, readCommand(pane, unwrapped), timeoutS = 15)
+        // an orch from before --unwrapped (clap: exit 2): the rows as the pane shows them
+        if (code == 2 && unwrapped) SshTab.exec(c, readCommand(pane, false), timeoutS = 15).let { code = it.first; out = it.second }
         return if (code == 0) out else null
     }
 }

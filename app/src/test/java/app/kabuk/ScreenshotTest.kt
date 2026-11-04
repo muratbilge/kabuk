@@ -137,6 +137,8 @@ $E[38;5;208m╰─────────────────────�
             a("claude", "working", "kabuk", "/projects/kabuk", true),
             a("codex", "idle", "~", "/home/dev"),
             a("claude", "idle", "webshop", "/docker/webshop"),
+            a("codex", "limited", "paperscanner", "/projects/paperscanner")
+                .copy(statusText = "usage limit · continues 08:54", limitReset = 1793778780000L),
         )
         t.questions.value = mapOf("p_notes-app" to app.kabuk.text.Pending(
             "Bash command\nsudo systemctl restart wg-quick@wg0\nDo you want to proceed?",
@@ -172,6 +174,29 @@ $E[38;5;208m╰─────────────────────�
         TabManager.closeAll()
     }
 
+    /** an agent paused on its usage limit: the Paused group, the badge with the time it goes on, orchd's status text */
+    @Test fun pausedAgent() {
+        val t = fakeAgents()
+        t.agents.value = listOf(
+            app.kabuk.agents.Agent("orch:p3", "orch:p3", "codex", "limited", "/projects/paperscanner", "paperscanner", 3, true,
+                statusText = "usage limit · continues 08:54", limitReset = 1793778780000L),
+            app.kabuk.agents.Agent("orch:p4", "orch:p4", "claude", "working", "/projects/kabuk", "kabuk", 2, false),
+        )
+        t.questions.value = emptyMap()
+        TabManager.agentsChanged(t)
+        TabManager.add(FakeTab(200, "kabuk", approval))
+        app.kabuk.term.Themes.apply("Kabuk", TabManager.tabs.value)
+        val ui = ui()
+        ui.autoDetect = false
+        compose.setContent { KabukTheme { Box(Modifier.fillMaxSize().background(Bg)) { TerminalScreen(ui, {}, {}, {}) } } }
+        compose.waitForIdle()
+        ui.showAgents = true
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1000); compose.waitForIdle()
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/agents-paused.png")
+        TabManager.closeAll()
+    }
+
     /** the native workspace bar of an orch server: kabuk on screen with its three tabs, the others waiting */
     @Test fun workspaceBar() {
         fun tab(i: Int, id: String, label: String, pane: String, st: String = "") =
@@ -179,13 +204,14 @@ $E[38;5;208m╰─────────────────────�
         val ws = listOf(
             app.kabuk.agents.Workspace("w1", 1, "murat", "/home/murat", "", false, 0, listOf(tab(0, "t1", "1", "orch:p1"))),
             app.kabuk.agents.Workspace("w2", 2, "kabuk", "/projects/kabuk", "blocked", true, 1, listOf(
-                tab(0, "t2", "1", "orch:p2", "blocked"), tab(1, "t3", "2", "orch:p3"), tab(2, "t4", "tests", "orch:p4", "working"),
+                tab(0, "t2", "1", "orch:p2", "blocked"), tab(1, "t3", "2", "orch:p3", "limited"), tab(2, "t4", "tests", "orch:p4", "working"),
             )),
             app.kabuk.agents.Workspace("w3", 3, "orchtool", "/projects/orchtool", "working", false, 0, listOf(tab(0, "t5", "1", "orch:p5", "working"))),
             app.kabuk.agents.Workspace("w4", 4, "", "/docker/webshop", "idle", false, 0, listOf(tab(0, "t6", "1", "orch:p6", "idle"), tab(1, "t7", "2", "orch:p7"))),
         )
         val agents = listOf(
             app.kabuk.agents.Agent("orch:p2", "orch:p2", "claude", "blocked", "/projects/kabuk", "kabuk", 2, true),
+            app.kabuk.agents.Agent("orch:p3", "orch:p3", "claude", "limited", "/projects/kabuk", "kabuk", 2, false, autoContinue = false),
             app.kabuk.agents.Agent("orch:p4", "orch:p4", "codex", "working", "/projects/kabuk", "kabuk", 2, false),
         )
         compose.setContent {

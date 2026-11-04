@@ -518,10 +518,11 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     }
 
     /**
-     * Runs a workspace-bar command (`orch ws`/`orch tab`, [cmd] gives its exit status) on this connection;
-     * done(null) = done, else what went wrong in words. [action] names it in the log (ids only, never a label).
+     * Runs a plain `orch` command ([cmd] gives its exit status: `orch ws`/`tab`, `question close`, `auto-continue`)
+     * on this connection; done(null) = done, else what went wrong in words, [what] naming the thing ("tab",
+     * "question"). [action] names it in the log (ids only, never a label or a question's text).
      */
-    fun layout(action: String, what: String, cmd: (SSHClient) -> Int?, done: (String?) -> Unit) {
+    fun act(action: String, what: String, cmd: (SSHClient) -> Int?, done: (String?) -> Unit) {
         val c = conn ?: return done("Not connected")
         if (!usesOrch) return done("No orchtool on ${host.name}")
         thread {
@@ -530,6 +531,26 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             TabManager.main.post { done(err) }
         }
     }
+
+    /** `orch auto-continue`: whether orchd goes on with [a] after its usage limit resets; shown at once, confirmed by the next watch line */
+    fun autoContinue(a: Agent, on: Boolean, done: (String?) -> Unit) =
+        act("auto-continue ${a.paneId} ${if (on) "on" else "off"}", "agent", { Orch.autoContinue(it, a.paneId, on) }) { err ->
+            if (err == null) {
+                agents.value = agents.value.map { if (it.terminalId == a.terminalId) it.copy(autoContinue = on) else it }
+                TabManager.agentsChanged(this)
+            }
+            done(err)
+        }
+
+    /** `orch question close`: dismisses a bus question unanswered (the asker's wait ends); gone from the list at once */
+    fun closeQuestion(id: Long, done: (String?) -> Unit) =
+        act("question close #$id", "question", { Orch.closeQuestion(it, id) }) { err ->
+            if (err == null) {
+                busQuestions.value = busQuestions.value.filter { it.id != id }
+                TabManager.agentsChanged(this)
+            }
+            done(err)
+        }
 
     fun focusAgent(a: Agent, done: (Boolean) -> Unit) {
         val c = conn ?: return done(false)

@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -72,12 +73,15 @@ class WsActions(
     val closeWorkspace: (Workspace) -> Unit = {},
     val renameTab: (Workspace, WsTab, String) -> Unit = { _, _, _ -> },
     val closeTab: (Workspace, WsTab) -> Unit = { _, _ -> },
+    /** whether orchd goes on with that agent after a usage limit (`orch auto-continue`) */
+    val autoContinue: (Agent, Boolean) -> Unit = { _, _ -> },
 )
 
 /**
  * The native workspace bar of an orch server: a chip per orchd workspace (its agents' most urgent status as a dot,
  * the one on screen in the TUI lit), that one's tabs after it when it has more than one, and + for a new
- * workspace. Tap = show it in the TUI (`orch ws focus`, `orch tab focus`); long-press = new tab, rename, close.
+ * workspace. Tap = show it in the TUI (`orch ws focus`, `orch tab focus`); long-press = new tab, rename, close,
+ * and on a tab with an agent the auto-continue switch for its usage limits.
  * Nothing is shown while the stream reports no workspaces (herdr servers, orchd down, an old orch).
  */
 @Composable
@@ -86,7 +90,7 @@ fun WorkspaceBar(tab: SshTab) {
     if (workspaces.isEmpty()) return
     val agents by tab.agents.collectAsState()
     fun run(action: String, what: String, cmd: (SSHClient) -> Int?, ok: String? = null) =
-        tab.layout(action, what, cmd) { err -> (err ?: ok)?.let(TabManager::toast) }
+        tab.act(action, what, cmd) { err -> (err ?: ok)?.let(TabManager::toast) }
     WorkspaceBarContent(
         workspaces, agents,
         WsActions(
@@ -100,6 +104,7 @@ fun WorkspaceBar(tab: SshTab) {
             closeWorkspace = { w -> run("ws close ${w.id}", "workspace", { Orch.closeWorkspace(it, w.id) }, "Closed ${w.place}") },
             renameTab = { w, t, l -> run("tab rename ${w.id} ${t.id}", "tab", { Orch.renameTab(it, w.id, t.id, l) }) },
             closeTab = { w, t -> run("tab close ${w.id} ${t.id}", "tab", { Orch.closeTab(it, w.id, t.id) }, "Closed tab ${t.label}") },
+            autoContinue = { a, on -> tab.autoContinue(a, on) { err -> TabManager.toast(err ?: "Auto-continue ${if (on) "on" else "off"} for ${a.place}") } },
         ),
     )
 }
@@ -209,9 +214,16 @@ private fun TabChip(w: Workspace, t: WsTab, agents: List<Agent>, act: WsActions)
                 label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp,
                 modifier = Modifier.widthIn(max = 110.dp), color = if (active) Text1 else Color(0xFFB4BCD0),
             )
+            if (agent?.limited == true) { Spacer(Modifier.width(5.dp)); PauseSign(Blue, 9.dp) }
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
             if (!active) DropdownMenuItem(text = { Text("Show") }, onClick = { menu = false; act.focusTab(w, t) })
+            // the pane's agent goes on by itself a minute after its usage limit resets (orchd types "continue")
+            if (agent != null && agent.paneId.startsWith("orch:")) DropdownMenuItem(
+                text = { Text("Auto-continue after a usage limit") },
+                trailingIcon = { Checkbox(checked = agent.autoContinue, onCheckedChange = null) },
+                onClick = { menu = false; act.autoContinue(agent, !agent.autoContinue) },
+            )
             DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; rename = true })
             DropdownMenuItem(text = { Text("Close tab…", color = Bad) }, onClick = { menu = false; confirmClose = true })
         }
@@ -228,12 +240,13 @@ private fun TabChip(w: Workspace, t: WsTab, agents: List<Agent>, act: WsActions)
     ) { act.closeTab(w, t) }
 }
 
-/** the agents' most urgent status: ● pink needs you, ● amber working, ● green idle, ○ no agent */
+/** the agents' most urgent status: ● pink needs you, ● amber working, ● blue paused on a usage limit, ● green idle, ○ no agent */
 @Composable
 private fun AgentDot(status: String, size: Dp = 7.dp) {
     when (status) {
         "blocked" -> Box(Modifier.size(size).clip(CircleShape).background(Bad))
         "working" -> Box(Modifier.size(size).clip(CircleShape).background(Warn))
+        "limited" -> Box(Modifier.size(size).clip(CircleShape).background(Blue))
         "idle", "done" -> Box(Modifier.size(size).clip(CircleShape).background(Good))
         else -> Box(Modifier.size(size).clip(CircleShape).border(1.dp, Muted, CircleShape))
     }

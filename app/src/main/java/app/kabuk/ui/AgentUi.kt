@@ -1,6 +1,11 @@
 package app.kabuk.ui
 
 import androidx.compose.material3.SegmentedButton
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Icon
@@ -36,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.kabuk.agents.Agent
@@ -46,6 +52,7 @@ import app.kabuk.term.TabManager
 private fun statusColor(a: Agent) = when (a.status) {
     "blocked" -> Bad
     "working" -> Warn
+    "limited" -> Blue
     "idle", "done" -> Good
     else -> Muted
 }
@@ -59,6 +66,7 @@ fun AgentsChip(onClick: () -> Unit) {
     if (all.isEmpty() && asks == 0) return
     val needs = all.count { it.needsYou } + asks
     val working = all.count { it.working }
+    val paused = all.count { it.limited }
     // logo pink (tertiary container) when someone waits for you; 48dp touch target
     Row(
         Modifier.padding(end = 2.dp).height(40.dp).padding(vertical = 4.dp).clip(RoundedCornerShape(16.dp))
@@ -66,12 +74,13 @@ fun AgentsChip(onClick: () -> Unit) {
             .clickable(onClick = onClick).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (needs > 0) Bad else if (working > 0) Warn else Good))
+        Box(Modifier.size(8.dp).clip(CircleShape).background(if (needs > 0) Bad else if (working > 0) Warn else if (paused > 0) Blue else Good))
         Spacer(Modifier.width(6.dp))
         Text(
             when {
                 needs > 0 -> "$needs need${if (needs == 1) "s" else ""} you"
-                working > 0 -> "$working working"
+                working > 0 -> "$working working" + if (paused > 0) " · $paused paused" else ""
+                paused > 0 -> "$paused paused"
                 else -> "${all.size} idle"
             },
             fontSize = 13.sp, fontWeight = FontWeight.Medium, color = if (needs > 0) Color(0xFFFFD9DF) else Text1,
@@ -130,11 +139,13 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                         t.answerQuestion(q.id, opt) { r ->
                             TabManager.toast(if (r == AnswerOutcome.SENT) "Answered ${q.from}: $opt" else r.text)
                         }
-                    }, onReply = { replyTo = t to q })
+                    }, onReply = { replyTo = t to q }, onDismiss = {
+                        t.closeQuestion(q.id) { err -> TabManager.toast(err ?: "Dismissed ${q.from}'s question") }
+                    })
                 }
             }
-            listOf("blocked" to "Needs you", "working" to "Working", "done" to "Done", "idle" to "Idle", "unknown" to "Other").forEach { (st, title) ->
-                val group = rows.filter { (_, a) -> if (st == "unknown") a.status !in setOf("blocked", "working", "done", "idle") else a.status == st }
+            listOf("blocked" to "Needs you", "working" to "Working", "limited" to "Paused on a usage limit", "done" to "Done", "idle" to "Idle", "unknown" to "Other").forEach { (st, title) ->
+                val group = rows.filter { (_, a) -> if (st == "unknown") a.status !in setOf("blocked", "working", "limited", "done", "idle") else a.status == st }
                 if (group.isNotEmpty()) {
                     item {
                         Text(title, style = MaterialTheme.typography.titleSmall, color = if (st == "blocked") Bad else Muted,
@@ -166,6 +177,9 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
                                         }
                                     }
                                 }
+                            },
+                            onAutoContinue = { on ->
+                                t.autoContinue(a, on) { err -> TabManager.toast(err ?: "Auto-continue ${if (on) "on" else "off"} for ${a.place}") }
                             },
                         )
                     }
@@ -216,63 +230,107 @@ fun AgentsSheet(ui: TerminalUi, onDismiss: () -> Unit) {
     }
 }
 
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun AgentRow(
     t: SshTab, a: Agent, showHost: Boolean, q: app.kabuk.text.Pending?,
     /** the choice this phone already sent for [q] (the agent hasn't taken it yet), or null */
     answered: String?,
     onClick: () -> Unit, onAnswer: (app.kabuk.text.Choice) -> Unit,
+    /** the long-press menu's switch: whether orchd goes on with this agent after a usage limit (orch panes only) */
+    onAutoContinue: (Boolean) -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).clip(CircleShape).background(statusColor(a)))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(a.place, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    a.name + " · " + a.cwd.replace(Regex("^/home/[^/]+"), "~") + if (showHost) " · ${t.hostName}" else "",
-                    style = MaterialTheme.typography.bodySmall, color = Muted, fontFamily = Mono, maxLines = 1,
-                )
+    var menu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    Box {
+        Column(
+            Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = { menu = true })
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(statusColor(a)))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(a.place, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        a.name + " · " + a.cwd.replace(Regex("^/home/[^/]+"), "~") + if (showHost) " · ${t.hostName}" else "",
+                        style = MaterialTheme.typography.bodySmall, color = Muted, fontFamily = Mono, maxLines = 1,
+                    )
+                }
+                if (a.limited) { PauseBadge(a); if (a.focused) Spacer(Modifier.width(8.dp)) }
+                if (a.focused) Text("on screen", style = MaterialTheme.typography.labelMedium, color = Accent)
             }
-            if (a.focused) Text("on screen", style = MaterialTheme.typography.labelMedium, color = Accent)
-        }
-        // the inbox part: what it asks, and the answers
-        if (q != null) {
-            if (q.prompt.isNotBlank()) Text(
-                q.prompt, style = MaterialTheme.typography.bodyMedium, fontFamily = Mono, maxLines = 4,
-                modifier = Modifier.padding(start = 24.dp, top = 6.dp).fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp)).background(Surface2).padding(10.dp),
+            // paused on its usage limit: orchd's word on when it goes on ("usage limit · continues 08:54")
+            if (a.limited && a.statusText.isNotBlank()) Text(
+                a.statusText, style = MaterialTheme.typography.bodySmall, color = Blue,
+                modifier = Modifier.padding(start = 24.dp, top = 4.dp),
             )
-            // answered from this phone, but the dialog is still on screen: no buttons, say so instead
-            if (answered != null) Text(
-                "Answered ${if (answered == app.kabuk.agents.Orch.ESC) "Esc" else answered}" +
-                    "${q.choices.firstOrNull { it.key == answered }?.let { " · ${it.label}" } ?: ""} from this phone · waiting for the agent",
-                style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2,
-                modifier = Modifier.padding(start = 24.dp, top = 8.dp),
-            )
-            else androidx.compose.foundation.layout.FlowRow(
-                Modifier.padding(start = 24.dp, top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                q.choices.forEachIndexed { i, c ->
-                    val no = c.label.startsWith("No", ignoreCase = true)
-                    Row(
-                        Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
-                            .background(if (i == 0) Accent else if (no) Color(0xFF6E2335) else Color(0xFF2A3B66))
-                            .clickable { onAnswer(c) }.padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val fg = if (i == 0) OnAccent else if (no) Color(0xFFFFD9DF) else Color(0xFFD9E2FF)
-                        Text(c.key, color = fg, fontFamily = Mono, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(6.dp))
-                        Text(c.label, color = fg, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            // the inbox part: what it asks, and the answers
+            if (q != null) {
+                if (q.prompt.isNotBlank()) Text(
+                    q.prompt, style = MaterialTheme.typography.bodyMedium, fontFamily = Mono, maxLines = 4,
+                    modifier = Modifier.padding(start = 24.dp, top = 6.dp).fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp)).background(Surface2).padding(10.dp),
+                )
+                // answered from this phone, but the dialog is still on screen: no buttons, say so instead
+                if (answered != null) Text(
+                    "Answered ${if (answered == app.kabuk.agents.Orch.ESC) "Esc" else answered}" +
+                        "${q.choices.firstOrNull { it.key == answered }?.let { " · ${it.label}" } ?: ""} from this phone · waiting for the agent",
+                    style = MaterialTheme.typography.bodySmall, color = Muted, maxLines = 2,
+                    modifier = Modifier.padding(start = 24.dp, top = 8.dp),
+                )
+                else androidx.compose.foundation.layout.FlowRow(
+                    Modifier.padding(start = 24.dp, top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    q.choices.forEachIndexed { i, c ->
+                        val no = c.label.startsWith("No", ignoreCase = true)
+                        Row(
+                            Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
+                                .background(if (i == 0) Accent else if (no) Color(0xFF6E2335) else Color(0xFF2A3B66))
+                                .clickable { onAnswer(c) }.padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val fg = if (i == 0) OnAccent else if (no) Color(0xFFFFD9DF) else Color(0xFFD9E2FF)
+                            Text(c.key, color = fg, fontFamily = Mono, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Text(c.label, color = fg, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                        }
                     }
                 }
             }
         }
+        DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Show") }, onClick = { menu = false; onClick() })
+            // orchd types "continue" into the pane a minute after its usage limit resets, unless switched off here
+            if (a.paneId.startsWith("orch:")) DropdownMenuItem(
+                text = { Text("Auto-continue after a usage limit") },
+                trailingIcon = { Checkbox(checked = a.autoContinue, onCheckedChange = null) },
+                onClick = { menu = false; onAutoContinue(!a.autoContinue) },
+            )
+        }
+    }
+}
+
+/** ⏸ and when the agent goes on (the reset time on its screen plus orchd's minute), in the phone's time zone */
+@Composable
+private fun PauseBadge(a: Agent) {
+    Row(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(Surface2).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PauseSign(Blue)
+        if (a.resumesAt > 0) {
+            Spacer(Modifier.width(4.dp))
+            Text(clock.format(java.util.Date(a.resumesAt)), color = Blue, style = MaterialTheme.typography.labelMedium, fontFamily = Mono)
+        }
+    }
+}
+
+/** a pause sign (two bars) in [color]: the same on every phone, unlike the ⏸ glyph, which emoji fonts paint orange */
+@Composable
+internal fun PauseSign(color: Color, height: Dp = 10.dp) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        repeat(2) { Box(Modifier.width(3.dp).height(height).clip(RoundedCornerShape(1.dp)).background(color)) }
     }
 }
 
@@ -318,10 +376,10 @@ private fun NewAgentDialog(known: List<String>, onDismiss: () -> Unit, onStart: 
     )
 }
 
-/** a question from the orchtool bus: its text, the agent's options as buttons, and "Reply…" for your own words */
+/** a question from the orchtool bus: its text, the agent's options as buttons, "Reply…" for your own words, Dismiss */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun BusQuestionRow(q: app.kabuk.agents.BusQuestion, onOption: (String) -> Unit, onReply: () -> Unit) {
+private fun BusQuestionRow(q: app.kabuk.agents.BusQuestion, onOption: (String) -> Unit, onReply: () -> Unit, onDismiss: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).clip(CircleShape).background(Bad))
@@ -353,6 +411,12 @@ private fun BusQuestionRow(q: app.kabuk.agents.BusQuestion, onOption: (String) -
                     .clickable(onClick = onReply).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) { Text("Reply…", color = Text1, style = MaterialTheme.typography.labelLarge) }
+            // close it unanswered (`orch question close`): the asker's wait ends without an answer
+            Row(
+                Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onDismiss).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) { Text("Dismiss", color = Muted, style = MaterialTheme.typography.labelLarge) }
         }
     }
 }

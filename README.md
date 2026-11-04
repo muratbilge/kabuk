@@ -6,6 +6,12 @@ It's a Termux replacement for that job: the same terminal engine, with better ke
 ## Features
 
 ### orchtool, updater, live log (0.5)
+- **0.5.8 — paused agents, dismiss, unwrapped copy.** An agent that hit its usage limit (orchtool status
+  `limited`, 7c47764) is listed under "Paused on a usage limit" with a ⏸ badge and the time it goes on (orchd
+  types "continue" a minute after the reset; the tab bar's chip counts it as paused). Long-press its row, or its
+  tab chip in the workspace bar, to switch that off or on per pane (`orch auto-continue`). "Asks you" cards have
+  Dismiss (`orch question close`: 14 gone, 11 answered already). "Copy text…" on an orch pane reads it
+  `--unwrapped`, so a long line comes as one line (an older orch without the flag: as before).
 - **0.5.7 — native workspace bar.** On an orch server a slim bar under the tab strip shows orchd's workspaces as
   chips (the agents' most urgent status as a dot, the one on screen in the TUI lit) with that workspace's tabs after
   it; tap = show it in the TUI (`orch ws focus`, `orch tab focus`), long-press = new tab (shell, Claude, Codex),

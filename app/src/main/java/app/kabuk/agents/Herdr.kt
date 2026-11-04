@@ -10,7 +10,7 @@ data class Agent(
     val terminalId: String,
     val paneId: String,
     val name: String,          // "claude", "codex", ...
-    val status: String,        // idle | working | blocked | unknown
+    val status: String,        // idle | working | blocked | limited | unknown
     val cwd: String,
     val workspace: String,     // the workspace label ("notes-app", "~")
     val workspaceNumber: Int,
@@ -21,8 +21,16 @@ data class Agent(
     val statusText: String = "",
     /** known to the orchtool bus (messages reach it); false for a pane orchd only detected (no hooks) */
     val registered: Boolean = true,
+    /** orchtool, while `limited`: when its usage limit resets (epoch ms; 0 = no time on its screen) */
+    val limitReset: Long = 0,
+    /** orchtool: orchd types "continue" into its pane a minute after the reset (`orch auto-continue`) */
+    val autoContinue: Boolean = true,
 ) {
     val needsYou get() = status == "blocked"
+    /** paused on its usage limit (orchtool): its screen ends with the limit notice */
+    val limited get() = status == "limited"
+    /** when it goes on (epoch ms): a minute after the reset with auto-continue, else the reset itself; 0 = unknown */
+    val resumesAt get() = if (limitReset == 0L) 0L else limitReset + (if (autoContinue) 60_000L else 0L)
     val working get() = status == "working"
     /** finished and not looked at yet (herdr's "done"), or idle */
     val resting get() = status == "done" || status == "idle"
