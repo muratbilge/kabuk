@@ -155,6 +155,10 @@ Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt).
 
 ## History
 
+- **0.5.9 — new workspace in the right folder.** The dialog lists the server's folders (home, its subfolders,
+  ~/projects/*, /projects/*, /docker/*) and filters them as you type; a tap fills the field. Before starting, Kabuk
+  asks the server whether the folder exists: a missing ~/projects/x whose /projects/x exists offers that one, any
+  other missing folder can be created (`mkdir -p`) first. Errors and the log name the path.
 - **0.5.8 — paused agents, dismiss, unwrapped copy.** An agent that hit its usage limit (orchtool status
   `limited`, 7c47764) is listed under "Paused on a usage limit" with a ⏸ badge and the time it goes on (orchd
   types "continue" a minute after the reset; the tab bar's chip counts it as paused). Long-press its row, or its

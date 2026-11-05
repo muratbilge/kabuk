@@ -66,8 +66,12 @@ import net.schmizz.sshj.SSHClient
 class WsActions(
     val focusWorkspace: (Workspace) -> Unit = {},
     val focusTab: (Workspace, WsTab) -> Unit = { _, _ -> },
-    /** folder, label ("" = the folder's name), tool ("" = a shell) */
-    val newWorkspace: (String, String, String) -> Unit = { _, _, _ -> },
+    /** folder, label ("" = the folder's name), tool ("" = a shell), create the folder first */
+    val newWorkspace: (String, String, String, Boolean) -> Unit = { _, _, _, _ -> },
+    /** the server's usual project folders, for the dialog's suggestions */
+    val listFolders: ((List<String>) -> Unit) -> Unit = { it(emptyList()) },
+    /** whether a folder exists on the server, before a workspace is started there */
+    val checkFolder: (String, (Orch.FolderCheck) -> Unit) -> Unit = { d, done -> done(Orch.FolderCheck.Exists(d)) },
     val newTab: (Workspace, String) -> Unit = { _, _ -> },
     val renameWorkspace: (Workspace, String) -> Unit = { _, _ -> },
     val closeWorkspace: (Workspace) -> Unit = {},
@@ -96,9 +100,12 @@ fun WorkspaceBar(tab: SshTab) {
         WsActions(
             focusWorkspace = { w -> run("ws focus ${w.id}", "workspace", { Orch.focusWorkspace(it, w.id) }) },
             focusTab = { w, t -> run("tab focus ${w.id} ${t.id}", "tab", { Orch.focusTab(it, w.id, t.id) }) },
-            newWorkspace = { dir, label, tool ->
-                run("ws new", "folder", { Orch.newWorkspace(it, dir, label, tool) }, "Started ${tool.ifBlank { "a shell" }} in $dir")
+            newWorkspace = { dir, label, tool, create ->
+                run("ws new $dir" + if (create) " (create)" else "", dir, { Orch.newWorkspace(it, dir, label, tool, create) },
+                    "Started ${tool.ifBlank { "a shell" }} in $dir")
             },
+            listFolders = { done -> tab.folders(done) },
+            checkFolder = { dir, done -> tab.checkFolder(dir, done) },
             newTab = { w, tool -> run("tab new ${w.id}", "workspace", { Orch.newTab(it, w.id, tool) }, "New tab in ${w.place}") },
             renameWorkspace = { w, l -> run("ws rename ${w.id}", "workspace", { Orch.renameWorkspace(it, w.id, l) }) },
             closeWorkspace = { w -> run("ws close ${w.id}", "workspace", { Orch.closeWorkspace(it, w.id) }, "Closed ${w.place}") },
@@ -134,10 +141,66 @@ fun WorkspaceBarContent(workspaces: List<Workspace>, agents: List<Agent>, act: W
             }
         }
     }
-    if (newWs) NewWorkspaceDialog(workspaces.map { it.cwd } + agents.map { it.cwd }, onDismiss = { newWs = false }) { dir, label, tool ->
+    // a folder that isn't there: what the server suggests instead, or make it
+    var missing by remember { mutableStateOf<Triple<Orch.FolderCheck.Missing, String, String>?>(null) }
+    if (newWs) NewWorkspaceDialog(workspaces.map { it.cwd } + agents.map { it.cwd }, act.listFolders, onDismiss = { newWs = false }) { dir, label, tool ->
         newWs = false
-        act.newWorkspace(dir, label, tool)
+        act.checkFolder(dir) { r ->
+            when (r) {
+                is Orch.FolderCheck.Exists -> act.newWorkspace(r.path, label, tool, false)
+                is Orch.FolderCheck.Missing -> missing = Triple(r, label, tool)
+                is Orch.FolderCheck.Failed -> TabManager.toast(r.why)
+            }
+        }
     }
+    missing?.let { (m, label, tool) ->
+        MissingFolderDialog(m, onDismiss = { missing = null }, onUse = { dir, create ->
+            missing = null
+            act.newWorkspace(dir, label, tool, create)
+        })
+    }
+}
+
+/** "There is no ~/projects/x": use /projects/x when that exists, or create the folder (mkdir -p), or cancel */
+@Composable
+private fun MissingFolderDialog(m: Orch.FolderCheck.Missing, onDismiss: () -> Unit, onUse: (String, Boolean) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (m.instead != null) "Did you mean ${m.instead}?" else "Create ${tilde(m.path)}?") },
+        text = {
+            Text(
+                "There is no folder ${tilde(m.path)} on the server." +
+                    (m.instead?.let { " $it exists." } ?: " Kabuk can create it and start the workspace there."),
+                fontFamily = Mono,
+            )
+        },
+        confirmButton = {
+            Row {
+                if (m.instead != null) TextButton(onClick = { onUse(m.path, true) }) { Text("Create ${tilde(m.path)}") }
+                TextButton(onClick = { if (m.instead != null) onUse(m.instead, false) else onUse(m.path, true) }) {
+                    Text(if (m.instead != null) "Use ${m.instead}" else "Create")
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** /home/murat/x → ~/x, as the folder field shows paths */
+internal fun tilde(path: String): String = path.replace(Regex("^/home/[^/]+(?=/|$)"), "~")
+
+/**
+ * The dialog's folder suggestions: the folders in use first, then the server's listing; with text typed, those that
+ * contain it (a leading ~/ ignored, so "~/projects/kab" still finds /projects/kabuk), the ones that start with it first.
+ */
+internal fun folderSuggestions(known: List<String>, listed: List<String>, typed: String, max: Int = 8): List<String> {
+    val all = (known + listed).map { tilde(it.trim().trimEnd('/')) }.filter { it.isNotBlank() && it != "/" }.distinct()
+    val q = typed.trim()
+    val key = q.removePrefix("~").trim('/')
+    if (key.isEmpty()) return all.filter { it != q }.take(max)
+    return all.filter { it != q && it.contains(key, ignoreCase = true) }
+        .sortedBy { if (it.startsWith(q, ignoreCase = true)) 0 else 1 }
+        .take(max)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -263,14 +326,19 @@ private fun ConfirmClose(title: String, text: String, onDismiss: () -> Unit, onC
     )
 }
 
-/** folder + what runs in it (a shell, Claude or Codex) + an optional name; recent folders as one-tap suggestions */
+/** folder + what runs in it (a shell, Claude or Codex) + an optional name; the server's folders as one-tap suggestions, filtered as you type */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun NewWorkspaceDialog(known: List<String>, onDismiss: () -> Unit, onStart: (String, String, String) -> Unit) {
+private fun NewWorkspaceDialog(
+    known: List<String>, listFolders: ((List<String>) -> Unit) -> Unit,
+    onDismiss: () -> Unit, onStart: (String, String, String) -> Unit,
+) {
     var dir by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
     var tool by remember { mutableStateOf("claude") }
-    val suggestions = known.map { it.replace(Regex("^/home/[^/]+"), "~") }.filter { it.isNotBlank() && it != "~" && it != "/" }.distinct().take(6)
+    var listed by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) { listFolders { listed = it } }
+    val suggestions = folderSuggestions(known, listed, dir)
     val tools = listOf("" to "Shell", "claude" to "Claude", "codex" to "Codex")
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -284,7 +352,7 @@ private fun NewWorkspaceDialog(known: List<String>, onDismiss: () -> Unit, onSta
                 }
                 OutlinedTextField(
                     dir, { dir = it }, label = { Text("Folder on the server") }, singleLine = true,
-                    placeholder = { Text("~/projects/…") }, modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("pick one below, or type a path") }, modifier = Modifier.fillMaxWidth(),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = Mono),
                 )
                 if (suggestions.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(

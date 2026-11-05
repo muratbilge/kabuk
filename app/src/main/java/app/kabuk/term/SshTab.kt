@@ -532,6 +532,29 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
         }
     }
 
+    /** the server's usual project folders (absolute), for the new-workspace dialog; empty when offline */
+    fun folders(done: (List<String>) -> Unit) {
+        val c = conn ?: return done(emptyList())
+        thread {
+            val list = Orch.listFolders(c.client)
+            TabManager.main.post { done(list) }
+        }
+    }
+
+    /** whether [dir] exists on the server (and what it probably meant if not); the path is logged, it isn't secret */
+    fun checkFolder(dir: String, done: (Orch.FolderCheck) -> Unit) {
+        val c = conn ?: return done(Orch.FolderCheck.Failed("Not connected"))
+        thread {
+            val r = Orch.checkFolder(c.client, dir)
+            KLog.i("AGENT", "folder $dir: " + when (r) {
+                is Orch.FolderCheck.Exists -> "exists (${r.path})"
+                is Orch.FolderCheck.Missing -> "missing (${r.path})" + (r.instead?.let { ", $it exists" } ?: "")
+                is Orch.FolderCheck.Failed -> r.why
+            })
+            TabManager.main.post { done(r) }
+        }
+    }
+
     /** `orch auto-continue`: whether orchd goes on with [a] after its usage limit resets; shown at once, confirmed by the next watch line */
     fun autoContinue(a: Agent, on: Boolean, done: (String?) -> Unit) =
         act("auto-continue ${a.paneId} ${if (on) "on" else "off"}", "agent", { Orch.autoContinue(it, a.paneId, on) }) { err ->

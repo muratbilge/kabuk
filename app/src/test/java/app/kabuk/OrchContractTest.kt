@@ -45,6 +45,49 @@ class OrchContractTest {
         assertEquals(AnswerOutcome.FAILED, Orch.outcomeOf(99))
     }
 
+    private fun shOut(cmd: String, home: File): Pair<Int, String> {
+        val p = ProcessBuilder("/bin/sh", "-c", cmd).redirectErrorStream(true)
+        p.environment().apply { clear(); put("PATH", "/usr/bin:/bin"); put("HOME", home.absolutePath) }
+        val proc = p.start()
+        val out = proc.inputStream.readBytes().decodeToString()
+        return proc.waitFor() to out
+    }
+
+    /** the new-workspace dialog asks the server about the folder first: exists, missing (and ~/x → /x), the listing */
+    @Test fun folders() {
+        val home = createTempDir()
+        File(home, "a").mkdirs(); File(home, ".hidden").mkdirs()
+        fun check(d: String) = shOut(Orch.checkFolderCommand(d), home).let { (c, o) -> Orch.parseFolderCheck(c, o) }
+        assertEquals(Orch.FolderCheck.Exists(File(home, "a").absolutePath), check("~/a"))
+        assertEquals(Orch.FolderCheck.Exists(File(home, "a").absolutePath), check("a"))
+        assertEquals(Orch.FolderCheck.Exists(home.absolutePath), check("~"))
+        // ~/usr isn't there, /usr is: suggested (the ~/projects/x → /projects/x case)
+        assertEquals(Orch.FolderCheck.Missing("${home.absolutePath}/usr", "/usr"), check("~/usr"))
+        assertEquals(Orch.FolderCheck.Missing("${home.absolutePath}/no such", null), check("~/no such"))
+        assertEquals(Orch.FolderCheck.Missing("/no/such/dir", null), check("/no/such/dir"))
+        assertTrue(Orch.parseFolderCheck(null, "") is Orch.FolderCheck.Failed)
+        val (code, out) = shOut(Orch.LIST_FOLDERS, home)
+        assertEquals(0, code)
+        val listed = out.lines()
+        assertTrue(home.absolutePath in listed)
+        assertTrue(File(home, "a").absolutePath in listed)
+        assertFalse(listed.any { it.endsWith("/.hidden") })
+        home.deleteRecursively()
+    }
+
+    @Test fun folderSuggestions() {
+        val listed = listOf("/home/murat", "/home/murat/bin", "/projects/kabuk", "/projects/orchtool", "/projects/paperscanner")
+        val known = listOf("/projects/kabuk", "/home/murat")
+        assertEquals(listOf("/projects/kabuk", "~", "~/bin", "/projects/orchtool", "/projects/paperscanner"),
+            app.kabuk.ui.folderSuggestions(known, listed, ""))
+        // typed with ~/ in front, as if the projects were in home: still found
+        assertEquals(listOf("/projects/kabuk"), app.kabuk.ui.folderSuggestions(known, listed, "~/projects/kab"))
+        assertEquals(listOf("/projects/orchtool"), app.kabuk.ui.folderSuggestions(known, listed, "ORCH"))
+        // what is typed already isn't offered again; starts-with first
+        assertEquals(listOf("/projects/paperscanner"), app.kabuk.ui.folderSuggestions(known, listed, "/projects/pa"))
+        assertTrue(app.kabuk.ui.folderSuggestions(known, listed, "/projects/kabuk").isEmpty())
+    }
+
     private fun sh(cmd: String, home: File): Int {
         val p = ProcessBuilder("/bin/sh", "-c", cmd).redirectErrorStream(true)
         p.environment().apply { clear(); put("PATH", "/usr/bin:/bin"); put("HOME", home.absolutePath) }
@@ -171,6 +214,7 @@ class OrchContractTest {
             "#!/bin/sh\n" +
                 "if [ \"\$1\" = tab ] && [ \"\$2\" = rename ]; then [ \"\$3\" = w1 ] && [ \"\$4\" = t1 ] && [ \"\$5\" = -- ] && [ \"\$6\" = 'my tab' ] && [ \$# = 6 ] || exit 99; exit 14; fi\n" +
                 "if [ \"\$1\" = tab ] && [ \"\$2\" = new ]; then [ \"\$3\" = w1 ] && [ \"\$4\" = -- ] && [ \"\$5\" = claude ] && [ \$# = 5 ] || exit 99; echo p9; exit 0; fi\n" +
+                "if [ \"\$1\" = ws ] && [ \"\$2\" = new ] && [ \"\$6\" = made ]; then [ \"\$4\" = \"\$HOME/new/x\" ] || exit 99; echo p9; exit 0; fi\n" +
                 "if [ \"\$1\" = ws ] && [ \"\$2\" = new ]; then [ \"\$3\" = --cwd ] && [ \"\$4\" = \"\$HOME\" ] && [ \"\$5\" = --label ] && [ \"\$6\" = 'my ws' ] && [ \$# = 6 ] || exit 99; exit 14; fi\n" +
                 "if [ \"\$1\" = focus ]; then [ \"\$2\" = p9 ] || exit 98; exit 0; fi\n" +
                 "if [ \"\$1\" = auto-continue ]; then [ \"\$2\" = orch:p3 ] && [ \"\$3\" = off ] && [ \$# = 3 ] || exit 99; exit 0; fi\n" +
@@ -191,6 +235,12 @@ class OrchContractTest {
         assertFalse(Orch.readCommand("herdr:abc", false).contains("--unwrapped"))
         assertEquals("That question was answered already", Orch.layoutError(11, "question"))
         assertEquals("That question is gone", Orch.layoutError(14, "question"))
+        // a missing folder is made first when asked (mkdir -p), then the workspace starts in it
+        assertEquals(4, sh(Orch.newWorkspaceCommand("~/new/x", "made", ""), home))
+        assertEquals(0, sh(Orch.newWorkspaceCommand("~/new/x", "made", "", create = true), home))
+        assertTrue(File(home, "new/x").isDirectory)
+        assertEquals("There is no folder ~/projects/x on the server", Orch.layoutError(4, "~/projects/x"))
+        assertEquals("Couldn't create /srv/x on the server", Orch.layoutError(5, "/srv/x"))
         assertEquals("That tab is gone", Orch.layoutError(14, "tab"))
         assertEquals("There is no such folder on the server", Orch.layoutError(4, "folder"))
         assertNull(Orch.layoutError(0, "workspace"))
