@@ -137,7 +137,7 @@ class OrchContractTest {
     @Test fun screenHashes() {
         val u = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!
         // orchtool 054d83c: the hash is over the normalized screen text
-        assertEquals("31e4558739b0108e", u.hashes["orch:p1"])
+        assertEquals("67956e90aae93038", u.hashes["orch:p1"])
         assertEquals(u.screens.keys, u.hashes.keys)
         // an orch without the field: no hashes, the answer path rereads the pane
         assertTrue(Orch.parseUpdate("""{"agents":[],"questions":[],"screens":{},"timeline":[]}""")!!.hashes.isEmpty())
@@ -173,8 +173,8 @@ class OrchContractTest {
         val w = u.workspaces.single()
         assertEquals("w1", w.id)
         assertEquals(1, w.number)
-        assertEquals("webshop", w.label)
-        assertEquals("webshop", w.place)
+        assertEquals("proj", w.label)
+        assertEquals("proj", w.place)
         assertEquals("blocked", w.status)
         assertTrue(w.shown)
         assertEquals(0, w.activeTab)
@@ -247,4 +247,64 @@ class OrchContractTest {
         assertEquals("No reply from orch", Orch.layoutError(null, "workspace"))
         home.deleteRecursively()
     }
+
+    /** orchtool P6A: the task queues in the watch line (the shared fixture has one queued task), all fields, and an older line without them */
+    @Test fun tasks() {
+        val fx = Orch.parseUpdate(res("orch-watch-v1.json").trim())!!
+        val q = fx.tasks.single()
+        assertEquals(1L, q.id); assertEquals("proj", q.target); assertEquals("queued", q.state); assertEquals("Review the change", q.text)
+        assertEquals("murat", q.createdBy); assertEquals(0L, q.after); assertEquals("", q.pane); assertEquals("", q.error); assertTrue(q.open)
+        val u = Orch.parseUpdate(
+            """{"v":1,"agents":[],"tasks":[""" +
+                """{"id":5,"target":"kabuk@t3","text":"fix it\nthen test","state":"failed","created_by":"murat","created_ms":1,"started_ms":2,"finished_ms":3,"pane":"p4","after":null,"error":"pane exited","saw_working":true},""" +
+                """{"id":4,"target":"kabuk","text":"one","state":"running","created_by":"murat","created_ms":1,"started_ms":2,"finished_ms":null,"pane":"p3","after":2,"error":null,"saw_working":false}]}""",
+        )!!
+        assertEquals(listOf(4L, 5L), u.tasks.map { it.id })
+        val (running, failed) = u.tasks
+        assertEquals("kabuk", failed.workspace); assertEquals("fix it", failed.firstLine); assertEquals("pane exited", failed.error)
+        assertFalse(failed.open); assertEquals(3L, failed.finishedMs); assertEquals("p4", failed.pane)
+        assertEquals(2L, running.after); assertTrue(running.open); assertEquals(0L, running.finishedMs)
+        // the workspace bar counts a workspace's tasks by its label (tabs included); an unnamed one can't be a target
+        val ws = fx.workspaces.single()
+        assertEquals(listOf(1L), app.kabuk.ui.tasksOf(ws, fx.tasks).map { it.id })
+        assertEquals(listOf(4L, 5L), app.kabuk.ui.tasksOf(ws.copy(label = "kabuk"), u.tasks).map { it.id })
+        assertTrue(app.kabuk.ui.tasksOf(ws.copy(label = ""), fx.tasks).isEmpty())
+        // before P6A: no tasks key
+        assertTrue(Orch.parseUpdate("""{"agents":[]}""")!!.tasks.isEmpty())
+        // orchd's task notes arrive on the bus with their thread
+        assertEquals("tasks", Orch.parseUpdate("""{"agents":[],"timeline":[{"id":9,"ts_ms":1,"from":"orchd","to":"murat","kind":"msg","text":"task #4 done","thread":"tasks"}]}""")!!.timeline.single().thread)
+        assertEquals("", fx.timeline.single().thread)
+    }
+
+    /** `orch task add/cancel/done` through a real sh: the text stays one argument whatever it holds, the id comes back, the exit codes become words */
+    @Test fun taskCommands() {
+        val home = createTempDir()
+        File(home, ".local/bin").mkdirs()
+        val orch = File(home, ".local/bin/orch")
+        orch.writeText(
+            "#!/bin/sh\n" +
+                "if [ \"\$1\" = task ] && [ \"\$2\" = add ]; then printf '%s\\0' \"\$@\" > \"\$HOME/args\"; echo 42; exit 0; fi\n" +
+                "if [ \"\$1\" = task ] && [ \"\$2\" = cancel ]; then [ \"\$3\" = 7 ] && [ \$# = 3 ] || exit 99; exit 14; fi\n" +
+                "if [ \"\$1\" = task ] && [ \"\$2\" = done ]; then [ \"\$3\" = 8 ] && [ \$# = 3 ] || exit 99; exit 1; fi\n" +
+                "exit 97\n",
+        )
+        orch.setExecutable(true)
+        val text = "-v first line with 'quotes', \"double\", \$HOME and `date`\nsecond line; exit 3"
+        val (code, out) = shOut(Orch.addTaskCommand("kabuk@t3", text, 12), home)
+        assertEquals(0, code); assertEquals("42", out.trim())
+        assertEquals(listOf("task", "add", "--after", "12", "--", "kabuk@t3", text), File(home, "args").readText().split('\u0000').dropLast(1))
+        shOut(Orch.addTaskCommand("kabuk", "one"), home)
+        assertEquals(listOf("task", "add", "--", "kabuk", "one"), File(home, "args").readText().split('\u0000').dropLast(1))
+        assertEquals(14, sh(Orch.orchCommand("task", "cancel", "7"), home))
+        assertEquals(1, sh(Orch.orchCommand("task", "done", "8"), home))
+        assertEquals("orch knows no such workspace or tab, or no task #12", Orch.taskError(14, "add", 12))
+        assertEquals("orch knows no such workspace or tab", Orch.taskError(14, "add"))
+        assertEquals("That task is gone", Orch.taskError(14, "cancel"))
+        assertEquals("That task isn't running", Orch.taskError(1, "done"))
+        assertEquals("That task has finished already", Orch.taskError(1, "cancel"))
+        assertEquals("orch on the server doesn't know that command (too old for this Kabuk): update orchtool", Orch.taskError(2, "add"))
+        assertNull(Orch.taskError(0, "add"))
+        home.deleteRecursively()
+    }
 }
+

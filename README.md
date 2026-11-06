@@ -45,6 +45,10 @@ Without either, Kabuk is a good terminal with tmux sessions that survive the con
   agents' most urgent status as a dot, the one on screen in the TUI lit) with that workspace's tabs after it.
   Tap = show it in the TUI, long-press = new tab (shell, Claude, Codex), rename, close (confirmed: closing kills
   the panes), + = a new workspace in a folder.
+- **Task queues.** Long-press a workspace chip → Tasks / Add task: orchd (orchtool P6A) types each queued task
+  into the workspace's agent once it is idle, oldest first, optionally after another task is done. The chip shows
+  how many tasks are open (amber while one runs); the list shows each task's state and why one failed, and an
+  open one can be cancelled or a running one marked done (both confirmed). orchd's task notes show in Comms.
 - **Usage limits.** An agent that hit its limit is listed as paused with the time it goes on (orchd types
   "continue" a minute after the reset). Long-press its row, or its tab chip in the bar, to switch that off or on
   per pane.
@@ -155,6 +159,10 @@ Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt).
 
 ## History
 
+- **0.6.0 — task queues.** A workspace's task queue from the phone (orchtool P6A, `orch task add/cancel/done`):
+  open-task count on the workspace chip, the task list with states and errors, a new task (several lines, the whole
+  workspace or one tab, optionally after another task), cancel / mark done with confirmation; bus messages show
+  their thread ("tasks").
 - **0.5.9 — new workspace in the right folder.** The dialog lists the server's folders (home, its subfolders,
   ~/projects/*, /projects/*, /docker/*) and filters them as you type; a tap fills the field. Before starting, Kabuk
   asks the server whether the folder exists: a missing ~/projects/x whose /projects/x exists offers that one, any

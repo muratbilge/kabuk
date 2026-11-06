@@ -217,13 +217,38 @@ $E[38;5;208m╰─────────────────────�
         compose.setContent {
             KabukTheme {
                 Box(Modifier.fillMaxWidth().background(Bg)) {
-                    app.kabuk.ui.WorkspaceBarContent(ws, agents, app.kabuk.ui.WsActions())
+                    app.kabuk.ui.WorkspaceBarContent(ws, agents, sampleTasks, app.kabuk.ui.WsActions())
                 }
             }
         }
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(1000); compose.waitForIdle()
         compose.onRoot().captureRoboImage("build/outputs/roborazzi/workspace-bar.png")
+    }
+
+    private val sampleTasks = listOf(
+        app.kabuk.agents.OrchTask(3, "kabuk", "Add the task queue to the workspace bar\nwith tests", "done", "murat", finishedMs = 1),
+        app.kabuk.agents.OrchTask(4, "kabuk@t4", "Run the screenshot tests and fix what changed", "failed", "murat", finishedMs = 2, error = "pane exited before the task finished"),
+        app.kabuk.agents.OrchTask(5, "kabuk", "Review the diff of 0.6.0 and list risky spots", "running", "murat", pane = "p2"),
+        app.kabuk.agents.OrchTask(6, "kabuk", "Write the release notes", "queued", "murat", after = 5),
+        app.kabuk.agents.OrchTask(7, "orchtool", "Update the contract notes", "queued", "murat"),
+    )
+
+    /** a workspace's task queue: running, waiting for it, failed with its reason, done */
+    @Test fun tasksDialog() {
+        val w = app.kabuk.agents.Workspace("w2", 2, "kabuk", "/projects/kabuk", "working", true, 0, listOf(
+            app.kabuk.agents.WsTab(0, "t2", "1", listOf("orch:p2"), "orch:p2", false, "working"),
+            app.kabuk.agents.WsTab(1, "t4", "tests", listOf("orch:p4"), "orch:p4", false, ""),
+        ))
+        compose.setContent {
+            KabukTheme {
+                Box(Modifier.fillMaxSize().background(Bg)) {
+                    app.kabuk.ui.TasksDialog(w, app.kabuk.ui.tasksOf(w, sampleTasks), {}, {}, { _, _ -> })
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/tasks.png")
     }
 
     @Test fun hosts() {

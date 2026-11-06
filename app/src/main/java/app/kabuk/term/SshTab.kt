@@ -68,6 +68,8 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
     val timeline = MutableStateFlow<List<app.kabuk.agents.BusMessage>>(emptyList())
     /** orchtool: the server's workspaces and their tabs, for the workspace bar (empty with herdr, or while the stream is down) */
     val workspaces = MutableStateFlow<List<app.kabuk.agents.Workspace>>(emptyList())
+    /** orchtool: the workspaces' task queues (open tasks + the last finished ones; empty before orchtool P6A) */
+    val tasks = MutableStateFlow<List<app.kabuk.agents.OrchTask>>(emptyList())
     /** orchtool: a note about the server's orch (newer or older than this app understands), for the agents sheet */
     val orchNote = MutableStateFlow<String?>(null)
     /** orchtool: each blocked pane's screen hash from the latest watch line (answers need no reread then) */
@@ -411,6 +413,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
                     busQuestions.value = u?.questions ?: emptyList()
                     timeline.value = u?.timeline ?: emptyList()
                     workspaces.value = u?.workspaces ?: emptyList()
+                    tasks.value = u?.tasks ?: emptyList()
                     TabManager.agentsChanged(this)
                 }
             }.onFailure { KLog.w("AGENT", "orch watch failed", it) }.getOrDefault(Herdr.StreamEnd.ENDED)
@@ -424,6 +427,7 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             busQuestions.value = emptyList()
             timeline.value = emptyList()
             workspaces.value = emptyList()
+            tasks.value = emptyList()
             orchNote.value = null
             TabManager.agentsChanged(this)
             when (end) {
@@ -564,6 +568,37 @@ class SshTab(id: Long, private val ctx: Context, hostInit: Host) : TermTab(id, h
             }
             done(err)
         }
+
+    /**
+     * `orch task add`: queues [text] for workspace [target]'s agent (after task [after] when > 0); done(error or
+     * null, the new id). The log gets the target and ids, never the text.
+     */
+    fun addTask(target: String, text: String, after: Long, done: (String?, Long?) -> Unit) {
+        val c = conn ?: return done("Not connected", null)
+        if (!usesOrch) return done("No orchtool on ${host.name}", null)
+        thread {
+            val (err, id) = runCatching {
+                val (code, id) = Orch.addTask(c.client, target, text, after)
+                Orch.taskError(code, "add", after) to id
+            }.getOrElse { "orch failed: ${it.reason()}" to null }
+            KLog.i("AGENT", "task add $target" + (if (after > 0) " after #$after" else "") + " (${text.length} chars): ${err ?: "ok #$id"}")
+            TabManager.main.post { done(err, id) }
+        }
+    }
+
+    /** `orch task cancel` / `orch task done` for task [id] */
+    fun finishTask(id: Long, cancel: Boolean, done: (String?) -> Unit) {
+        val op = if (cancel) "cancel" else "done"
+        val c = conn ?: return done("Not connected")
+        if (!usesOrch) return done("No orchtool on ${host.name}")
+        thread {
+            val err = runCatching {
+                Orch.taskError(if (cancel) Orch.cancelTask(c.client, id) else Orch.doneTask(c.client, id), op)
+            }.getOrElse { "orch failed: ${it.reason()}" }
+            KLog.i("AGENT", "task $op #$id: ${err ?: "ok"}")
+            TabManager.main.post { done(err) }
+        }
+    }
 
     /** `orch question close`: dismisses a bus question unanswered (the asker's wait ends); gone from the list at once */
     fun closeQuestion(id: Long, done: (String?) -> Unit) =

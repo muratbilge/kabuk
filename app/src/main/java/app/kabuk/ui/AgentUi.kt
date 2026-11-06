@@ -431,7 +431,7 @@ private fun TimelineRow(m: app.kabuk.agents.BusMessage) {
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "${m.from} → ${m.to}" + if (m.kind != "msg") " · ${m.kind}" else "",
+                "${m.from} → ${m.to}" + (if (m.kind != "msg") " · ${m.kind}" else "") + (if (m.thread.isNotEmpty()) " · ${m.thread}" else ""),
                 style = MaterialTheme.typography.labelMedium, color = if (m.kind == "ask") Bad else Accent, maxLines = 1,
             )
             Text(m.text, style = MaterialTheme.typography.bodySmall, maxLines = 4)

@@ -79,6 +79,10 @@ class WsActions(
     val closeTab: (Workspace, WsTab) -> Unit = { _, _ -> },
     /** whether orchd goes on with that agent after a usage limit (`orch auto-continue`) */
     val autoContinue: (Agent, Boolean) -> Unit = { _, _ -> },
+    /** `orch task add`: target (label or label@tab), text, after (0 = none) */
+    val addTask: (String, String, Long) -> Unit = { _, _, _ -> },
+    /** `orch task cancel` (true) or `orch task done` (false) */
+    val finishTask: (app.kabuk.agents.OrchTask, Boolean) -> Unit = { _, _ -> },
 )
 
 /**
@@ -93,10 +97,11 @@ fun WorkspaceBar(tab: SshTab) {
     val workspaces by tab.workspaces.collectAsState()
     if (workspaces.isEmpty()) return
     val agents by tab.agents.collectAsState()
+    val tasks by tab.tasks.collectAsState()
     fun run(action: String, what: String, cmd: (SSHClient) -> Int?, ok: String? = null) =
         tab.act(action, what, cmd) { err -> (err ?: ok)?.let(TabManager::toast) }
     WorkspaceBarContent(
-        workspaces, agents,
+        workspaces, agents, tasks,
         WsActions(
             focusWorkspace = { w -> run("ws focus ${w.id}", "workspace", { Orch.focusWorkspace(it, w.id) }) },
             focusTab = { w, t -> run("tab focus ${w.id} ${t.id}", "tab", { Orch.focusTab(it, w.id, t.id) }) },
@@ -112,12 +117,16 @@ fun WorkspaceBar(tab: SshTab) {
             renameTab = { w, t, l -> run("tab rename ${w.id} ${t.id}", "tab", { Orch.renameTab(it, w.id, t.id, l) }) },
             closeTab = { w, t -> run("tab close ${w.id} ${t.id}", "tab", { Orch.closeTab(it, w.id, t.id) }, "Closed tab ${t.label}") },
             autoContinue = { a, on -> tab.autoContinue(a, on) { err -> TabManager.toast(err ?: "Auto-continue ${if (on) "on" else "off"} for ${a.place}") } },
+            addTask = { target, text, after -> tab.addTask(target, text, after) { err, id -> TabManager.toast(err ?: "Queued task #${id ?: "?"} for $target") } },
+            finishTask = { t, cancel ->
+                tab.finishTask(t.id, cancel) { err -> TabManager.toast(err ?: "Task #${t.id} ${if (cancel) "cancelled" else "marked done"}") }
+            },
         ),
     )
 }
 
 @Composable
-fun WorkspaceBarContent(workspaces: List<Workspace>, agents: List<Agent>, act: WsActions) {
+fun WorkspaceBarContent(workspaces: List<Workspace>, agents: List<Agent>, tasks: List<app.kabuk.agents.OrchTask>, act: WsActions) {
     var newWs by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val shown = workspaces.indexOfFirst { it.shown }
@@ -132,7 +141,7 @@ fun WorkspaceBarContent(workspaces: List<Workspace>, agents: List<Agent>, act: W
                 horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 6.dp),
             ) {
                 workspaces.forEach { w ->
-                    item(key = "ws/${w.id}") { WorkspaceChip(w, act) }
+                    item(key = "ws/${w.id}") { WorkspaceChip(w, tasksOf(w, tasks), act) }
                     if (w.shown && w.tabs.size > 1) items(w.tabs, key = { "tab/${w.id}/${it.id}" }) { t -> TabChip(w, t, agents, act) }
                 }
             }
@@ -205,8 +214,11 @@ internal fun folderSuggestions(known: List<String>, listed: List<String>, typed:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkspaceChip(w: Workspace, act: WsActions) {
+private fun WorkspaceChip(w: Workspace, tasks: List<app.kabuk.agents.OrchTask>, act: WsActions) {
     var menu by remember { mutableStateOf(false) }
+    var showTasks by remember { mutableStateOf(false) }
+    var addTask by remember { mutableStateOf(false) }
+    val open = tasks.filter { it.open }
     var rename by remember { mutableStateOf(false) }
     var confirmClose by remember { mutableStateOf(false) }
     Box {
@@ -229,9 +241,17 @@ private fun WorkspaceChip(w: Workspace, act: WsActions) {
             )
             // how many tabs wait behind a workspace that isn't on screen (its tabs show once it is)
             if (w.tabs.size > 1 && !w.shown) { Spacer(Modifier.width(5.dp)); Text("${w.tabs.size}", fontSize = 11.sp, color = Muted) }
+            // its queued + running tasks
+            if (open.isNotEmpty()) { Spacer(Modifier.width(5.dp)); TaskCount(open) }
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
             if (!w.shown) DropdownMenuItem(text = { Text("Show") }, onClick = { menu = false; act.focusWorkspace(w) })
+            // tasks need the workspace's label (orchd's task target); an unnamed one gets one by Rename
+            if (w.label.isNotBlank()) {
+                DropdownMenuItem(text = { Text("Tasks" + if (open.isNotEmpty()) " (${open.size} open)…" else "…") }, onClick = { menu = false; showTasks = true })
+                DropdownMenuItem(text = { Text("Add task…") }, onClick = { menu = false; addTask = true })
+                HorizontalDivider()
+            }
             DropdownMenuItem(text = { Text("New tab: shell") }, onClick = { menu = false; act.newTab(w, "") })
             DropdownMenuItem(text = { Text("New tab: Claude") }, onClick = { menu = false; act.newTab(w, "claude") })
             DropdownMenuItem(text = { Text("New tab: Codex") }, onClick = { menu = false; act.newTab(w, "codex") })
@@ -244,6 +264,11 @@ private fun WorkspaceChip(w: Workspace, act: WsActions) {
         rename = false
         if (!l.isNullOrBlank() && l != w.place) act.renameWorkspace(w, l)
     }, title = "Rename workspace", hint = "name")
+    if (showTasks) TasksDialog(w, tasks, onDismiss = { showTasks = false }, onAdd = { showTasks = false; addTask = true }, onFinish = act.finishTask)
+    if (addTask) AddTaskDialog(w, open, onDismiss = { addTask = false }) { target, text, after ->
+        addTask = false
+        act.addTask(target, text, after)
+    }
     if (confirmClose) ConfirmClose(
         "Close ${w.place}?",
         "This kills every pane in it on the server (${w.tabs.size} tab${if (w.tabs.size == 1) "" else "s"}), including any agent running there.",

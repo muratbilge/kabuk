@@ -13,7 +13,32 @@ import org.json.JSONObject
 data class BusQuestion(val id: Long, val from: String, val text: String, val options: List<String>, val tsMs: Long)
 
 /** One row of the orchtool timeline: messages between agents and you, questions, answers. */
-data class BusMessage(val id: Long, val tsMs: Long, val from: String, val to: String, val kind: String, val text: String)
+data class BusMessage(
+    val id: Long, val tsMs: Long, val from: String, val to: String, val kind: String, val text: String,
+    /** the topic it belongs to ("tasks" for orchd's task start/done/failed notes), "" without one */
+    val thread: String = "",
+)
+
+/**
+ * A task in an orchd workspace queue (orchtool P6A): orchd types [text] into the workspace's agent once it is idle.
+ * [target] is the workspace label, or label@tab-id for one tab.
+ */
+data class OrchTask(
+    val id: Long, val target: String, val text: String,
+    /** queued, running, done, failed, cancelled */
+    val state: String,
+    val createdBy: String = "", val createdMs: Long = 0, val startedMs: Long = 0, val finishedMs: Long = 0,
+    /** the pane it was typed into (`pN`), "" before that */
+    val pane: String = "",
+    /** waits until that task is done; 0 = none */
+    val after: Long = 0,
+    val error: String = "",
+) {
+    val open get() = state == "queued" || state == "running"
+    /** the workspace label it targets (without the @tab) */
+    val workspace get() = target.substringBefore('@')
+    val firstLine get() = text.trim().lineSequence().firstOrNull().orEmpty()
+}
 
 /** A tab of an orchtool workspace, known by its id (a tab closed meanwhile can't shift a tap onto another). */
 data class WsTab(
@@ -61,6 +86,8 @@ object Orch {
         val hashes: Map<String, String> = emptyMap(),
         /** the layout for the workspace bar; empty before orchtool 1f30b5f */
         val workspaces: List<Workspace> = emptyList(),
+        /** the task queues: open tasks plus the last finished ones, by id; empty before orchtool P6A */
+        val tasks: List<OrchTask> = emptyList(),
     )
 
     /**
@@ -124,7 +151,7 @@ object Orch {
         val timeline = List(tl.length()) { i ->
             val m = tl.getJSONObject(i)
             BusMessage(m.getLong("id"), m.optLong("ts_ms"), m.optString("from"), m.optString("to"),
-                m.optString("kind"), m.optString("text"))
+                m.optString("kind"), m.optString("text"), text(m, "thread"))
         }
         val ws = o.optJSONArray("workspaces") ?: JSONArray()
         val workspaces = List(ws.length()) { i ->
@@ -141,7 +168,17 @@ object Orch {
                 },
             )
         }
-        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"), hashes, workspaces)
+        val ts = o.optJSONArray("tasks") ?: JSONArray()
+        val tasks = List(ts.length()) { i ->
+            val t = ts.getJSONObject(i)
+            fun long(key: String) = if (t.isNull(key)) 0L else t.optLong(key)
+            OrchTask(
+                t.getLong("id"), t.optString("target"), t.optString("text"), t.optString("state"),
+                text(t, "created_by"), long("created_ms"), long("started_ms"), long("finished_ms"),
+                text(t, "pane"), long("after"), text(t, "error"),
+            )
+        }.sortedBy { it.id }
+        return Update(agents, screens, questions, timeline, o.optString("human", "murat"), o.optInt("v", V), o.optString("orch"), hashes, workspaces, tasks)
     }
 
     /** a string field that may be JSON null: "" then (org.json's optString would say "null") */
@@ -437,5 +474,41 @@ object Orch {
         // an orch from before --unwrapped (clap: exit 2): the rows as the pane shows them
         if (code == 2 && unwrapped) SshTab.exec(c, readCommand(pane, false), timeoutS = 15).let { code = it.first; out = it.second }
         return if (code == 0) out else null
+    }
+
+    // ---------------------------------------------------------------- task queues (orchtool P6A)
+
+    /**
+     * `orch task add [--after ID] -- <target> <text>`: queues [text] for the agent of workspace [target] (a label, or
+     * label@tab-id); prints the task's id. `--` so a text starting with "-" stays text; the text goes quoted, newlines and all.
+     */
+    internal fun addTaskCommand(target: String, text: String, after: Long = 0): String =
+        orchCommand(*(listOf("task", "add") + (if (after > 0) listOf("--after", after.toString()) else emptyList()) + listOf("--", target, text)).toTypedArray())
+
+    /** the new task's id (exit 0), or the exit status (null = no reply in time; never retried, it must not be queued twice) */
+    fun addTask(c: SSHClient, target: String, text: String, after: Long = 0): Pair<Int?, Long?> = try {
+        val (code, out) = SshTab.exec(c, addTaskCommand(target, text.replace("\r\n", "\n").replace('\r', '\n'), after), timeoutS = 10)
+        code to (if (code == 0) out.trim().lineSequence().lastOrNull()?.trim()?.toLongOrNull() else null)
+    } catch (e: java.io.IOException) {
+        if (e.message.orEmpty().contains("took longer")) null to null else throw e
+    }
+
+    /** `orch task cancel ID`: no longer dispatched (a running agent isn't interrupted) */
+    fun cancelTask(c: SSHClient, id: Long): Int? = plain(c, orchCommand("task", "cancel", id.toString()))
+    /** `orch task done ID`: a running task finished (when orchd can't tell by itself) */
+    fun doneTask(c: SSHClient, id: Long): Int? = plain(c, orchCommand("task", "done", id.toString()))
+
+    /**
+     * What a task command's exit status means; null = done. 14: no such workspace (add) / task, or the --after task;
+     * 1: orch refused it (text with terminal control bytes, or a task that already finished).
+     */
+    fun taskError(exit: Int?, op: String, after: Long = 0): String? = when (exit) {
+        14 -> if (op == "add") "orch knows no such workspace or tab" + (if (after > 0) ", or no task #$after" else "") else "That task is gone"
+        1 -> when (op) {
+            "add" -> "orch refused the task (control characters in the text?)"
+            "done" -> "That task isn't running"
+            else -> "That task has finished already"
+        }
+        else -> layoutError(exit, "task")
     }
 }
