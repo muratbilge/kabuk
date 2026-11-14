@@ -257,3 +257,5 @@ B4 (Termux app commands inside Kabuk):
 8. `termux-reload-settings`: re-read ~/.termux/termux.properties for the few props Kabuk supports (extra-keys may
    be ignored; say so), `termux-info` prints Kabuk's info instead of failing.
 Emulator evidence per point; README/docs, History 0.8.2; gate green; commits [claude]; report as text.
+
+### B3+B4 released as 0.8.2 (38), 2026-11-14 (fixes the 0.8.1 termux-setup-storage data-loss bug; Murat had never run it)
