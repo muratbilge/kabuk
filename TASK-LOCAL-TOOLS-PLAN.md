@@ -299,3 +299,9 @@ B5 (Phone tab):
     or URLs (scheme+host at most).
 Emulator evidence per point; docs/LOCAL-TOOLS.md section + History entry 0.8.3 + Settings licences unchanged unless
 new code is added; gate green; commits [claude]; report as text (REPORT-claude.md). No version bump/release/push.
+
+### B5+B6 released as 0.8.3 (39), 2026-11-14. Open points from the worker's report:
+- calling `$PREFIX/libexec/termux-api` or `usr/bin/termux-*` by full path still waits for the Termux:API app (dpkg-owned files)
+- `termux-tts-speak` returns when queued (10 s answer limit); one silent "Scripts" channel, no heads-up for --priority high
+- emulator (x86_64) mirror termux.librehat.com gave 404; with usr/bin/login missing, the "Install" offer may show where Repair fits
+- not checked on hardware: speech, vibration, torch, notification --sound/--vibrate/--image-path/--ongoing
