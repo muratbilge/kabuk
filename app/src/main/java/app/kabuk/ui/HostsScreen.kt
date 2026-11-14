@@ -13,6 +13,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -133,18 +135,7 @@ fun HostsScreen(onConnected: () -> Unit, onEdit: (String?) -> Unit, onSettings: 
                     IconButton(onClick = { onEdit(h.id) }) { Icon(Icons.Default.Edit, "Edit", tint = Muted) }
                 }
             }
-            item {
-                Card(onClick = { TabManager.openLocal(); onConnected() }) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(Good.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.PhoneAndroid, null, tint = Good, modifier = Modifier.size(22.dp))
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text("Phone shell", style = MaterialTheme.typography.titleMedium)
-                        Text("A shell on this phone, with busybox tools", style = MaterialTheme.typography.bodySmall, color = Muted)
-                    }
-                }
-            }
+            item { PhoneShellRow(onConnected) }
         }
     }
         // thumb-reachable, bottom right
@@ -302,5 +293,54 @@ fun SwitchRow(title: String, checked: Boolean, subtitle: String? = null, onChang
             if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = Muted)
         }
         Switch(checked, onCheckedChange = null)
+    }
+}
+
+/**
+ * "Phone shell": tap opens a Phone tab (Termux's bash once installed, else busybox); long-press (or ⋮) offers the
+ * busybox shell for recovery and "Install Termux packages…".
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PhoneShellRow(onConnected: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val state by app.kabuk.term.TermuxInstaller.state.collectAsState()
+    val inst = app.kabuk.term.TermuxInstaller
+    val installed = remember(state) { inst.supported(ctx) && inst.installed(ctx) }
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Surface1)
+                .combinedClickable(onClick = { TabManager.openLocal(); onConnected() }, onLongClick = { menu = true })
+                .heightIn(min = 72.dp).padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(Good.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.PhoneAndroid, null, tint = Good, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Phone shell", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (installed) "A shell on this phone, with Termux packages (pkg)" else "A shell on this phone, with busybox tools",
+                    style = MaterialTheme.typography.bodySmall, color = Muted,
+                )
+            }
+            if (inst.supported(ctx)) IconButton(onClick = { menu = true }) {
+                Icon(androidx.compose.material.icons.Icons.Default.MoreVert, "Phone shell options", tint = Muted)
+            }
+        }
+        androidx.compose.material3.DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            if (installed) androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Phone (busybox)") },
+                onClick = { menu = false; TabManager.openLocal(busybox = true); onConnected() },
+            )
+            else if (state.running) androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Installing Termux packages…") }, onClick = { menu = false; inst.hidden.value = false },
+            )
+            else androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Install Termux packages…") }, onClick = { menu = false; inst.menu(ctx) },
+            )
+        }
     }
 }

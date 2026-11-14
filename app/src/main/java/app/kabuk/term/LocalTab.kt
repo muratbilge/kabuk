@@ -7,14 +7,16 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 
 /**
- * A shell on the phone itself: busybox ash with Kabuk's tools on PATH ([LocalTools]), or Android's /system/bin/sh when
- * the APK has no busybox. "-sh" as argv[0] makes either a login shell (reads ~/.profile).
+ * A shell on the phone itself: Termux's login shell (bash) once its packages are installed ([TermuxEnv]), else
+ * busybox ash with Kabuk's tools on PATH ([LocalTools]), or Android's /system/bin/sh when the APK has no busybox.
+ * [busybox] forces the busybox shell (recovery when the Termux prefix is broken). "-sh"/"-login" as argv[0] makes a
+ * login shell.
  */
-class LocalTab(id: Long, ctx: Context) : TermTab(id, "Phone", 0xFF9ECE6A) {
+class LocalTab(id: Long, ctx: Context, val busybox: Boolean = false) : TermTab(id, if (busybox) "Phone (busybox)" else "Phone", 0xFF9ECE6A) {
     private val client = object : TerminalSessionClient by QuietSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) = screenChanged()
         override fun onTitleChanged(changedSession: TerminalSession) {
-            title.value = changedSession.title?.takeIf { it.isNotBlank() } ?: "Phone"
+            title.value = changedSession.title?.takeIf { it.isNotBlank() } ?: defaultTitle
         }
         override fun onSessionFinished(finishedSession: TerminalSession) {
             status.value = Status.Ended("exited (${finishedSession.exitStatus})")
@@ -31,10 +33,14 @@ class LocalTab(id: Long, ctx: Context) : TermTab(id, "Phone", 0xFF9ECE6A) {
     }
 
     private val session: TerminalSession
+    private val defaultTitle = if (busybox) "Phone (busybox)" else "Phone"
+    /** runs Termux's login shell (not busybox) */
+    val termux: Boolean
 
     init {
-        val setup = LocalTools.prepare(ctx)
-        session = TerminalSession(setup.shell, setup.home.absolutePath, arrayOf("-sh"), setup.env, Settings.current.scrollbackLines, client)
+        val setup = LocalTools.prepare(ctx, termux = !busybox)
+        termux = setup.termux
+        session = TerminalSession(setup.shell, setup.home.absolutePath, setup.args, setup.env, Settings.current.scrollbackLines, client)
         session.updateSize(80, 24)
         status.value = Status.Connected
     }

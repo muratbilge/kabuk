@@ -93,7 +93,20 @@ object TabManager {
     fun currentTab(): TermTab? = _tabs.value.firstOrNull { it.id == current.value }
 
     fun openSsh(host: Host): TermTab = add(SshTab(nextId++, app, host))
-    fun openLocal(): TermTab = add(LocalTab(nextId++, app))
+    /** A Phone tab: Termux's login shell when its packages are installed, else (or with [busybox]) busybox ash. */
+    fun openLocal(busybox: Boolean = false): TermTab {
+        val t = LocalTab(nextId++, app, busybox)
+        add(t)
+        if (!t.termux && !busybox) TermuxInstaller.phoneTabOpened(app)
+        return t
+    }
+
+    /** Main thread. Keeps [SessionService] running with no tab open (the Termux install runs in the background). */
+    fun keepAlive(on: Boolean) {
+        keepAlive = on
+        tabsChanged()
+    }
+    private var keepAlive = false
 
     internal fun add(t: TermTab): TermTab {
         if (t is SshTab) logStatus(t)
@@ -149,7 +162,7 @@ object TabManager {
 
     private fun tabsChanged() {
         val i = Intent(app, SessionService::class.java)
-        if (_tabs.value.isEmpty()) app.stopService(i)
+        if (_tabs.value.isEmpty() && !keepAlive) app.stopService(i)
         else runCatching {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i) else app.startService(i)
         }.onFailure { toast("Couldn't start the background service: sessions may drop when the app is closed") }

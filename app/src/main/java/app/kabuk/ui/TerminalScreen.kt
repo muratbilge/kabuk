@@ -283,6 +283,7 @@ private fun TabStrip(
 ) {
     var newMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     var confirmCloseAll by remember { mutableStateOf(false) }
     if (confirmCloseAll) androidx.compose.material3.AlertDialog(
         onDismissRequest = { confirmCloseAll = false },
@@ -316,6 +317,9 @@ private fun TabStrip(
                     )
                 }
                 DropdownMenuItem(text = { Text("Phone shell") }, onClick = { newMenu = false; TabManager.openLocal() })
+                if (app.kabuk.term.TermuxInstaller.installed(ctx)) DropdownMenuItem(
+                    text = { Text("Phone (busybox)") }, onClick = { newMenu = false; TabManager.openLocal(busybox = true) },
+                )
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Servers…") }, onClick = { newMenu = false; onOpenHosts() })
             }
@@ -337,6 +341,7 @@ private fun TabStrip(
                 DropdownMenuItem(text = { Text("Smaller text") }, onClick = {
                     Settings.update { it.copy(fontSizeSp = (it.fontSizeSp - 1).coerceAtLeast(6f)) }
                 })
+                if (current is LocalTab) TermuxMenuItem(current) { moreMenu = false }
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Servers") }, onClick = { moreMenu = false; onOpenHosts() })
                 DropdownMenuItem(text = { Text("Settings") }, onClick = { moreMenu = false; onOpenSettings() })
@@ -344,6 +349,26 @@ private fun TabStrip(
                     onClick = { moreMenu = false; confirmCloseAll = true })
             }
         }
+    }
+}
+
+/**
+ * Phone tab menus: "Install Termux packages…" until they are installed, the progress while installing, and
+ * "Restart shell" for a busybox tab once they are.
+ */
+@Composable
+private fun TermuxMenuItem(t: LocalTab, close: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val state by app.kabuk.term.TermuxInstaller.state.collectAsState()
+    val inst = app.kabuk.term.TermuxInstaller
+    when {
+        !inst.supported(ctx) -> {}
+        state.running -> DropdownMenuItem(text = { Text("Installing Termux packages…") },
+            onClick = { close(); inst.hidden.value = false })
+        !inst.installed(ctx) -> DropdownMenuItem(text = { Text("Install Termux packages…") },
+            onClick = { close(); inst.menu(ctx) })
+        !t.termux && !t.busybox -> DropdownMenuItem(text = { Text("Restart shell (Termux)") },
+            onClick = { close(); TabManager.close(t); TabManager.openLocal() })
     }
 }
 
@@ -392,6 +417,7 @@ private fun TabChip(t: TermTab, selected: Boolean, ui: TerminalUi, onTextMode: (
             DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; rename = true })
             if (t is SshTab) DropdownMenuItem(text = { Text("Reconnect") }, onClick = { menu = false; t.reconnect() })
             DropdownMenuItem(text = { Text("Copy text…") }, onClick = { menu = false; onTextMode(t) })
+            if (t is LocalTab) TermuxMenuItem(t) { menu = false }
             DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; TabManager.move(t, -1) })
             DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; TabManager.move(t, 1) })
             if (t is SshTab) DropdownMenuItem(text = { Text("Duplicate") }, onClick = {

@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
                         Snack.host, Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
                     )
                     prompts.firstOrNull()?.let { PromptDialog(it) }
+                    app.kabuk.ui.TermuxSheet(onOpenTerminal = { screen = Screen.Terminal })
                     ui.link?.let { LinkDialog(it) { ui.link = null } }
                 }
                 BackHandler {
@@ -176,6 +177,14 @@ class MainActivity : ComponentActivity() {
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
 
         handleIntent(intent)
+    }
+
+    @Deprecated("ComponentActivity's result API isn't used here")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        @Suppress("DEPRECATION") super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_STORAGE) return
+        if (app.kabuk.term.StorageAccess.granted(this)) app.kabuk.term.StorageAccess.link(this)
+        else { KLog.i("STORAGE", "storage access not granted"); TabManager.toast("Storage access not granted") }
     }
 
     private fun home(): Screen = if (TabManager.tabs.value.isNotEmpty()) Screen.Terminal else Screen.Hosts
@@ -280,6 +289,7 @@ class MainActivity : ComponentActivity() {
                     }
                 } else TabManager.toast("That connection is closed")
             }
+            ACTION_STORAGE -> requestPermissions(app.kabuk.term.StorageAccess.PERMISSIONS, REQ_STORAGE)
             ACTION_CONNECT -> if (i.getStringExtra("token") == Settings.shortcutToken()) Hosts.get(i.getStringExtra("host") ?: "")?.let { h ->
                 // reuse an open tab to that server, else open one
                 val open = TabManager.tabs.value.filterIsInstance<app.kabuk.term.SshTab>().firstOrNull { it.hostId == h.id }
@@ -324,5 +334,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_CONNECT = "app.kabuk.CONNECT"
         const val ACTION_OPEN_AGENT = "app.kabuk.OPEN_AGENT"
+        const val ACTION_STORAGE = "app.kabuk.STORAGE"
+        private const val REQ_STORAGE = 2
     }
 }

@@ -29,6 +29,8 @@ object UrlOpener {
         @Suppress("DEPRECATION") // the File constructor is API 29+, minSdk is 26
         observer = object : FileObserver(dir.absolutePath, MOVED_TO or CLOSE_WRITE) {
             override fun onEvent(event: Int, path: String?) {
+                // termux-setup-storage (files/kabuk/bin) asks for storage access
+                if (path == "storage.req") { File(dir, path).delete(); TabManager.main.post { StorageAccess.request(TabManager.app) }; return }
                 if (path == null || !path.endsWith(".url")) return
                 handle(File(dir, path)) { url -> TabManager.main.post { open(url, fromProgram = true) } }
             }

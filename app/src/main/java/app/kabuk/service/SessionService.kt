@@ -62,7 +62,8 @@ class SessionService : Service() {
             this, code, Intent(this, SessionService::class.java).setAction(a), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("$n session${if (n == 1) "" else "s"} open")
+            .setContentTitle(if (n == 0 && app.kabuk.term.TermuxInstaller.running) "Installing Termux packages"
+                else "$n session${if (n == 1) "" else "s"} open")
             .setContentText(summary() + if (locked) " · wake lock on" else "")
             .setContentIntent(open)
             .setOngoing(true)
@@ -110,7 +111,8 @@ class SessionService : Service() {
         /** re-posts the notification, but only when its text changed (agents are polled every 3 s) */
         fun refresh() {
             val s = instance ?: return
-            val text = s.summary() + "|" + TabManager.tabs.value.size + "|" + (s.wakeLock?.isHeld == true)
+            val text = s.summary() + "|" + TabManager.tabs.value.size + "|" + (s.wakeLock?.isHeld == true) + "|" +
+                app.kabuk.term.TermuxInstaller.running
             if (text == lastShown) return
             lastShown = text
             s.getSystemService(NotificationManager::class.java).notify(ID, s.build())

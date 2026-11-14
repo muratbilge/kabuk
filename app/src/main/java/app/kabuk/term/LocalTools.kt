@@ -34,10 +34,14 @@ object LocalTools {
     @Volatile private var tested = false
 
     /** What [LocalTab] needs to start its shell. */
-    class Setup(val shell: String, val env: Array<String>, val home: File)
+    class Setup(val shell: String, val env: Array<String>, val home: File, val args: Array<String> = arrayOf("-sh"),
+                val termux: Boolean = false)
 
-    /** Makes bin/home/tmp (bin is rebuilt only after an install or update) and returns the shell + environment. */
-    fun prepare(ctx: Context): Setup {
+    /**
+     * Makes bin/home/tmp (bin is rebuilt only after an install or update) and returns the shell + environment:
+     * Termux's login shell when [termux] and its packages are installed ([TermuxEnv]), else busybox.
+     */
+    fun prepare(ctx: Context, termux: Boolean = true): Setup {
         // canonical: filesDir is /data/user/0/<pkg>/files, a symlink path; the shell's getcwd() sees /data/data/...
         // and ash's \w only shows "~" when HOME is that same string
         val files = ctx.filesDir.canonicalFile
@@ -47,6 +51,9 @@ object LocalTools {
         val tmp = File(ctx.cacheDir, "tmp").apply { mkdirs() }
         val open = File(files, "open")
         runCatching { UrlOpener.start(open) }.onFailure { KLog.w(TAG, "URL opener not started", it) }
+        if (termux && TermuxEnv.supported(ctx) && TermuxEnv.installed(ctx)) {
+            runCatching { return TermuxEnv.setup(ctx, open) }.onFailure { KLog.w("TERMUX", "Termux shell setup failed, using busybox", it) }
+        }
         val busybox = runCatching {
             BinDir(bin, nativeDir).sync("${BuildConfig.VERSION_CODE} ${nativeDir.absolutePath} ${BinDir.LAYOUT}")
             File(bin, "busybox").takeIf { File(nativeDir, "libbusybox.so").isFile && Build.VERSION.SDK_INT >= BUSYBOX_MIN_SDK }
