@@ -233,6 +233,14 @@ class TermuxApiTest {
         assertEquals(TermuxApi.CHANNEL_HIGH, TermuxApi.channelFor(n.n.priority))
     }
 
+    @Test fun speechCap() {
+        assertEquals(30_000L, TermuxApi.speechCapMs(0))
+        assertEquals(30_150L, TermuxApi.speechCapMs(1))
+        assertEquals(111_000L, TermuxApi.speechCapMs(540))
+        assertEquals(600_000L, TermuxApi.speechCapMs(3_800))
+        assertEquals("at most 10 min", 600_000L, TermuxApi.speechCapMs(1_000_000))
+    }
+
     /** Text for the engine: line by line, long lines cut at a space below the engine's limit, blanks dropped. */
     @Test fun speechPieces() {
         assertEquals(listOf("hello"), TermuxApi.speechPieces("hello\n", 4000))

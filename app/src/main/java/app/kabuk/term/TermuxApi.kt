@@ -539,6 +539,26 @@ object TermuxApi {
     private val speaking = HashMap<String, SpeechJob>()
 
     /**
+     * How long a termux-tts-speak may take before Kabuk gives up (engine stuck): 30 s + 150 ms per character of
+     * the text, at most 10 min.
+     */
+    internal fun speechCapMs(chars: Int): Long = (30_000L + 150L * chars).coerceAtMost(600_000L)
+
+    /** Main thread: drops [job]'s queued pieces and stops the engine's speech (it stops other queued text too). */
+    private fun abandon(job: SpeechJob) {
+        val had = speaking.entries.removeAll { it.value === job }
+        if (had) tts?.stop()
+    }
+
+    /** Main thread: the program of the request answered through [done] is gone (Ctrl-C): stop its speech. */
+    fun cancelSpeech(done: (Answer) -> Unit) {
+        val job = speaking.values.firstOrNull { it.done === done } ?: return
+        abandon(job)
+        if (!job.answered) KLog.i(TAG, "${job.name}: speech stopped (the program ended)")
+        job.finish(Answer(1, "${job.name}: interrupted\n"))
+    }
+
+    /**
      * [text] in pieces the engine accepts ([max] chars, TextToSpeech.getMaxSpeechInputLength): line by line like
      * Termux:API reads stdin, a longer line split at the last space (or hard). Blank lines are dropped.
      */
@@ -593,6 +613,12 @@ object TermuxApi {
             val pieces = speechPieces(req.text, runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000))
             if (pieces.isEmpty()) return@say done(ok(name, "nothing to say"))
             val job = SpeechJob(name, req.text.length, pieces.size, done)
+            TabManager.main.postDelayed({
+                if (job.answered) return@postDelayed
+                abandon(job)
+                KLog.w(TAG, "$name: speech did not finish within ${speechCapMs(job.chars) / 1000} s, stopped")
+                job.finish(Answer(1, "$name: speech did not finish (engine stuck?)\n"))
+            }, speechCapMs(req.text.length))
             for (p in pieces) {
                 val id = "kabuk-${utterance.incrementAndGet()}"
                 speaking[id] = job

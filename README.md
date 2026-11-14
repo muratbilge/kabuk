@@ -234,7 +234,8 @@ the notices of its Go modules in the same place).
 ## History
 
 - **0.8.4 — polish.** `termux-notification --priority high|max` shows on top (new channel "Scripts (important)");
-  `termux-tts-speak` returns once the text is spoken (long texts too), and slow commands (a big `termux-media-scan`)
+  `termux-tts-speak` returns once the text is spoken (long texts too; gives up when the engine is stuck, and Ctrl-C
+  stops the speech), and slow commands (a big `termux-media-scan`)
   no longer give up after 10 s: Kabuk tells the waiting program it is still working (kabuk-open 4, Ctrl-C still
   ends it). After `pkg install termux-api` its `$PREFIX/bin/termux-*` scripts no longer hang when called by full
   path: Kabuk diverts them to its own commands (survives upgrades, undone when the package is removed), and

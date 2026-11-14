@@ -52,8 +52,9 @@ Logs: no test text in any `Kabuk.*` logcat line.
   keep-alives (only tts exceeded 10 s; the mechanism is generic).
 
 ## Open questions / notes
-- Keep-alive trade-off: a stuck answer (e.g. a TTS engine without voice data, seen on the emulator) now waits until
-  Ctrl-C or 1 h instead of failing after 10 s. Could add a per-command cap (e.g. tts: 10 min) if that's preferred.
-- Ctrl-C ends the waiting program but not the speech; stopping the engine would also cut other queued requests.
+- Follow-up (coordinator's decision): termux-tts-speak is capped at 30 s + 150 ms/char (max 10 min) → `tts.stop()`,
+  exit 1 "speech did not finish (engine stuck?)"; Ctrl-C (program gone, seen by the keep-alive) stops the speech.
+  General keep-alive limit stays 1 h. Unit test for the cap formula; not rerun on the emulator. `tts.stop()` also
+  cuts other queued termux-tts-speak text (they answer exit 1).
 - `usr/lib/libtermux-api.so` (programs linking Termux:API directly) still targets the missing app.
 - The "+" menu doesn't list "Phone (busybox)" while broken (plain "Phone shell" is busybox then).

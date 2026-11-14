@@ -300,6 +300,8 @@ Open a file or URL in an external app.
                 Thread({ reply(runCatching { TermuxApi.mediaScan(TabManager.app, name, r) }.getOrElse(failed)) }, "cmd-media-scan").start()
                 return
             }
+            // Ctrl-C (the program is gone): its speech stops too
+            if (r is TermuxApi.Req.Speak) call.onGone = { TabManager.main.post { TermuxApi.cancelSpeech(reply) } }
             runCatching { TermuxApi.execute(TabManager.app, name, r, reply) }.onFailure { reply(failed(it)) }
             return
         }
@@ -321,6 +323,8 @@ Open a file or URL in an external app.
         private var gone = false
         private var tick: java.util.concurrent.ScheduledFuture<*>? = null
         private val wait get() = File(dir, "$base.wait")
+        /** runs (on the keep-alive thread) when the program is found gone before the answer */
+        @Volatile var onGone: (() -> Unit)? = null
 
         fun keepAlive() {
             val started = System.currentTimeMillis()
@@ -331,6 +335,7 @@ Open a file or URL in an external app.
                     when {
                         pid != null && !alive(pid) -> {
                             gone = true; wait.delete(); tick?.cancel(false)
+                            onGone?.invoke()
                             KLog.i(TAG, "$name: the program ended before the answer (Ctrl-C?)")
                         }
                         System.currentTimeMillis() - started > KEEP_ALIVE_MAX_MS -> tick?.cancel(false)

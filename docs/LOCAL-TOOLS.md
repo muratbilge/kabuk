@@ -473,15 +473,18 @@ when the program is gone (`kill(pid, 0)` → ESRCH; any other refusal counts as 
 `adb shell run-as` is in another SELinux domain) and then drops the answer instead of leaving it in `files/open`;
 at most 1 h. `termux-tts-speak` now answers when the text is spoken (UtteranceProgressListener; the text goes to
 the engine line by line, long lines cut at a space below `getMaxSpeechInputLength`, blank lines dropped; error/stop
-→ exit 1; switching the engine with `-e` ends the old engine's pending requests with exit 1). *Verified* with eSpeak
+→ exit 1; switching the engine with `-e` ends the old engine's pending requests with exit 1). Speech has its own
+cap: after 30 s + 150 ms per character (at most 10 min) Kabuk stops the engine (`tts.stop()`) and answers exit 1
+"termux-tts-speak: speech did not finish (engine stuck?)"; Ctrl-C (the keep-alive finds the program gone) stops the
+speech too. `tts.stop()` also cuts other queued termux-tts-speak text (those answer exit 1). The cap and Ctrl-C stop
+are unit-tested (formula) but were added after the emulator run below. *Verified* with eSpeak
 NG (F-Droid, installed only into the throwaway emulator):
 - `termux-tts-speak hello from kabuk` → 1.2 s, rc 0, log "spoken (16 chars)"; 540 chars at `-r 0.8` → 39 s, rc 0
   (keep-alives held it past 10 s), `files/open` empty afterwards; three piped lines with a blank one → rc 0.
 - In the Phone tab: Ctrl-C after 14 s ends the waiting program at once; Kabuk logs "the program ended before the
-  answer (Ctrl-C?)" and leaves no file behind. The speech itself goes on (Ctrl-C doesn't stop the engine; a later
-  `termux-tts-speak` queues behind it).
-- With the engine broken (no voice data yet) the program kept waiting (3 min) until SIGINT — the price of
-  keep-alives: a stuck answer waits until Ctrl-C (or 1 h) instead of failing after 10 s.
+  answer (Ctrl-C?)" and leaves no file behind. (In that run, before the change above, the speech went on.)
+- With the engine broken (no voice data yet) the program kept waiting (3 min) until SIGINT; this led to the speech
+  cap above (that case now ends after 30 s + 150 ms per character with exit 1).
 - `termux-media-scan -r` of 30 000 files: "Finished scanning 30000 file(s)" in 1.3 s, rc 0.
 
 **Broken install → Repair.** `TermuxEnv.installed` now needs `usr/bin/login` *and* `usr/bin/bash`; `broken` = `usr`
