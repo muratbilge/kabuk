@@ -233,6 +233,9 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.8.5 — leftovers.** Ctrl-C on one `termux-tts-speak` (or giving up on a stuck one) stops only that text; other
+  queued speech goes on, and a request waiting behind a long text is no longer cut off. "+" offers "Phone (busybox)"
+  also while the Termux install is damaged; the Servers screen's ⋮ offers it and Repair there too.
 - **0.8.4 — polish.** `termux-notification --priority high|max` shows on top (new channel "Scripts (important)");
   `termux-tts-speak` returns once the text is spoken (long texts too; gives up when the engine is stuck, and Ctrl-C
   stops the speech), and slow commands (a big `termux-media-scan`)

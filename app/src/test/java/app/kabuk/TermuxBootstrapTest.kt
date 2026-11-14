@@ -212,4 +212,14 @@ class TermuxBootstrapTest {
         File(usr, "bin/login").delete()
         assertTrue(TermuxEnv.broken(usr))
     }
+
+    /** "+" menu: "Phone (busybox)" while usr is there (installed or damaged), not while it is absent. */
+    @Test fun busyboxTabOffered() {
+        val usr = File(tmp.root, "usr")
+        assertFalse("absent: Phone shell already is busybox", TermuxEnv.offersBusyboxTab(usr))
+        File(usr, "bin").mkdirs()
+        assertTrue("damaged", TermuxEnv.offersBusyboxTab(usr))
+        File(usr, "bin/login").writeText("x"); File(usr, "bin/bash").writeText("x")
+        assertTrue("installed", TermuxEnv.offersBusyboxTab(usr))
+    }
 }
