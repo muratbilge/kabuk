@@ -173,3 +173,23 @@ targetSdk 28 (untrusted_app_27 SELinux domain may exec app_data_file; W^X applie
 Report as text: verdict relocate-vs-rebuild with evidence, the audit table, what the prototype shows (commands +
 output), risks, and a step plan B1..Bn for the real implementation. Commits `[claude]` on branch claude/termux,
 gate green; no push/release/version bump.
+
+### B0 result (2026-11-14): relocation works (spike commit 0eeb425 on branch claude/termux, kept as reference)
+Termux's official bootstrap + `pkg install python git openssh curl` ran relocated on the emulator at targetSdk 28;
+fallback rebuild rejected. Step plan B1..B7 as in the worker's report (summarised in docs later, B7).
+
+### Brief: B1 — targetSdk 28 alone (release 0.8.0)
+Take from 0eeb425 ONLY: targetSdk 28 + lint disables, the explicit dark system bars (SystemBarStyle.dark), the
+notification handling for a legacy target. NOT TermuxEnv, StorageAccess, storage permissions or
+requestLegacyExternalStorage, LocalTools/LocalTab changes (busybox stays exactly as in 0.7.2 — check it still
+works at 28: links in files/bin still point into nativeLibraryDir; at 28 exec from data would also work, but keep it).
+Fix the open audit item: below targetSdk 33 Android shows the notification permission prompt only when a channel is
+created while an activity is in front, and Kabuk creates channels at process start, so on a fresh install
+notifications stay off silently. Make it reliable: create channels from MainActivity after it is shown (or
+otherwise trigger the system prompt), and if notifications are still off, a one-time visible note with "Turn on"
+(opens the app's notification settings). Upgrading phones (Murat's) already have the permission granted: verify an
+upgrade 0.7.2 (target 35) → B1 build (target 28) keeps it (emulator: install 0.7.2 debug, grant, upgrade).
+Verify on the emulator: fresh install (prompt or note appears, screenshot), upgrade path, SessionService
+foreground + its notification visible, Phone tab busybox ok, in-app updater code path (at least that
+PackageInstaller session install of a newer debug APK works from the app, if you can drive it; else say so),
+system bars dark. Gate green; docs/README History (0.8.0: "targetSdk 28, groundwork for Termux packages").
