@@ -106,13 +106,21 @@ question is still open, and starts agents as herdr workspaces. Kept until every 
 shell; `~/.profile` is made once and then yours) with about 260 busybox tools on PATH: `ls`, `grep`, `sed`, `awk`,
 `find`, `vi`, `less`, `tar`, `gzip`, `unzip`, `wget`, `nc`, `ps`, `top`, `diff`, `sha256sum`, `base64` and more.
 HOME is the app's own folder, `TMPDIR` its cache.
+- **rclone** 1.76.0 is on PATH too, built for Android so it finds host names. `rclone authorize "pcloud"` works on
+  the phone: rclone opens the browser, you log in, pCloud's redirect reaches rclone's local listener (Kabuk keeps
+  running in the background meanwhile), and the token is printed in the Phone tab. `rclone config` keeps its file
+  in `~/.config/rclone/`.
+- **Opening links:** `xdg-open <url>` (also `open`, `termux-open-url`) opens an http(s) link in the phone's browser;
+  any tool that calls `xdg-open` works. When a program only prints a link, an "Open link" chip at the top right
+  offers it (× hides it). In the background Kabuk can't bring up the browser itself; a snackbar with "Open" waits.
 - The tools ship inside the APK (`lib<name>.so`, built from pinned sources by `scripts/build-tools.sh`), because
   Android only lets an app run programs from the folder its native libraries are installed to; Kabuk links them
   into `files/bin`. They come with app updates; there is no `pkg install`.
 - Known gap: busybox `wget` and `nc` can't look up host names yet (a static binary has no route to Android's DNS
-  resolver); addresses work. Details and the design: `docs/LOCAL-TOOLS.md`.
-- The live log gets one line per tool when the first Phone tab opens (`TOOLS busybox: ok (BusyBox v1.37.0 …)`),
-  never what you type.
+  resolver); addresses work. rclone is not affected. Details and the design: `docs/LOCAL-TOOLS.md`.
+- The live log gets one line per tool when the first Phone tab opens (`TOOLS busybox: ok (BusyBox v1.37.0 …)`,
+  `TOOLS rclone: ok (rclone v1.76.0)`), and `OPEN` lines with only the scheme and host of a link that was opened,
+  never what you type and never a link's path or query (OAuth codes live there).
 
 Not included: Termux's package system (`pkg install`). Your server is the Linux machine.
 
@@ -161,6 +169,7 @@ term/   TermTab (one tab) → SshTab (sshj, reconnect loop, the orch/herdr strea
         TerminalCanvasView: draws with Termux's TerminalRenderer; own touch, selection and keyboard handling
         TabManager: all tabs, prompts for background threads, clipboard; Themes
         LocalTools: the Phone tab's bin dir (links into nativeLibraryDir), environment, self-test
+        UrlOpener: xdg-open's URLs (files/open, FileObserver) → the browser; the "Open link" chip
 agents/ Orch (orchtool: watch stream, answers, bus, workspaces), Herdr (herdr CLI over SSH), AnswerLedger (answer
         once), AgentNotifier + AnswerReceiver (needs-you / asks-you / finished notifications with answer buttons)
 text/   Unwrap (re-join wrapped lines), QuickReplies (numbered menus on screen)
@@ -174,10 +183,17 @@ ui/     Compose: terminal, key bar, prompt box, agents sheet, workspace bar, ser
 
 Libraries: Termux terminal-emulator / terminal-view (Apache 2.0), sshj, BouncyCastle, Jetpack Compose.
 Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt). Phone tab: BusyBox 1.37.0 (GPL-2.0; licence and source
-offer in `app/src/main/assets/licenses/`, shown in Settings → Licences).
+offer in `app/src/main/assets/licenses/`, shown in Settings → Licences), rclone 1.76.0 (MIT; licence, source and
+the notices of its Go modules in the same place).
 
 ## History
 
+- **0.7.1 — rclone and opening links.** rclone 1.76.0 built from its release tarballs for Android (Go + cgo,
+  linked against bionic, so DNS works) ships as `librclone.so`; `xdg-open`/`open`/`termux-open-url` link to a
+  tiny `libkabuk-open.so` that hands the URL to Kabuk, which opens http(s) links in the browser (a script can't do
+  this: Android won't run scripts from the app's data dir either). "Open link" chip for links a program only
+  prints. `rclone authorize "pcloud"` checked on the emulator up to pCloud's login page and the redirect reaching
+  rclone with Kabuk in the background. Licences: rclone's MIT text, source info and its modules' notices.
 - **0.7.0 — tools in the Phone tab.** busybox 1.37.0 (static, NDK r29, arm64-v8a + x86_64) ships as
   `libbusybox.so` and runs from nativeLibraryDir; `files/bin` holds a link per applet (rebuilt after every install
   or update), the shell is busybox ash with HOME/TMPDIR/PREFIX/SHELL set, and a self-test line per tool goes to the
@@ -235,8 +251,8 @@ offer in `app/src/main/assets/licenses/`, shown in Settings → Licences).
 
 Apache License 2.0, see `LICENSE`. Uses Termux's terminal-emulator and terminal-view (Apache 2.0), sshj
 (Apache 2.0), Bouncy Castle (MIT) and the JetBrains Mono font (SIL OFL 1.1, `FONT-LICENSE-OFL.txt`). The APK
-also contains BusyBox (GPL-2.0, a separate program run by the Phone tab; licence and source offer in
-`app/src/main/assets/licenses/`).
+also contains BusyBox (GPL-2.0) and rclone (MIT, with the notices of the Go modules it is built from), separate
+programs run by the Phone tab; licences and source offers in `app/src/main/assets/licenses/`.
 
 `scripts/release.sh` signs with Android's debug key, which is fine for your own phone. To hand the app to
 others, sign it with your own release key.

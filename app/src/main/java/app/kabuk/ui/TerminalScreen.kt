@@ -78,6 +78,10 @@ class TerminalUi(val view: TerminalCanvasView, val mods: ModifierState) {
     /** the prompt box normally takes two lines; expanded it gets a big editor for long prompts */
     var promptExpanded by mutableStateOf(false)
     var link by mutableStateOf<String?>(null)
+    /** Phone tab: the lowest http(s) link on screen, offered as "Open link" (null = none, or dismissed) */
+    var screenLink by mutableStateOf<String?>(null)
+    /** links the user opened or dismissed from that chip: not offered again */
+    val doneLinks = HashSet<String>()
     var showAgents by mutableStateOf(false)
     var showQuick by mutableStateOf(false)
     var choices by mutableStateOf<List<app.kabuk.text.Choice>>(emptyList())
@@ -187,6 +191,18 @@ fun TerminalScreen(
         }
     }
 
+    // Phone tab: a program printed a URL (and didn't open it itself through xdg-open): offer to open it
+    LaunchedEffect(tab) {
+        ui.screenLink = null
+        while (tab is LocalTab) {
+            if (TabManager.foreground) {
+                val u = ui.view.lastScreenLink()
+                ui.screenLink = u?.takeIf { it !in ui.doneLinks && !app.kabuk.term.UrlOpener.wasHandled(it) }
+            }
+            delay(700)
+        }
+    }
+
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
     ui.available = maxHeight
     Column(Modifier.fillMaxSize()) {
@@ -198,6 +214,7 @@ fun TerminalScreen(
             androidx.compose.material3.SnackbarHost(Snack.host, Modifier.align(Alignment.BottomCenter))
             if (tab != null) StatusBanner(tab, Modifier.align(Alignment.TopCenter))
             if (ui.selecting) SelectionBar(ui, Modifier.align(Alignment.TopCenter))
+            ui.screenLink?.let { OpenLinkChip(it, ui, Modifier.align(Alignment.TopEnd).padding(8.dp)) }
             if (!ui.atBottom) {
                 SmallFloatingActionButton(
                     onClick = { ui.view.scrollToBottom() },
@@ -215,6 +232,26 @@ fun TerminalScreen(
     }
     if (ui.showAgents) AgentsSheet(ui, onDismiss = { ui.showAgents = false })
     if (ui.showQuick) QuickSheet(ui, onDismiss = { ui.showQuick = false }, onEdit = onOpenSettings)
+}
+
+/** "Open link · example.com" with ×; one link at a time, the lowest on screen. Top right: the prompt is at the bottom. */
+@Composable
+private fun OpenLinkChip(url: String, ui: TerminalUi, modifier: Modifier) {
+    Row(
+        modifier.clip(RoundedCornerShape(16.dp)).background(Color(0xFF2A3B66)).heightIn(min = 36.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = { ui.doneLinks += url; ui.screenLink = null; app.kabuk.term.UrlOpener.open(url) }) {
+            Text(
+                "Open link · " + app.kabuk.term.UrlOpener.origin(url).substringAfter("://"),
+                color = Color(0xFFD9E2FF), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 240.dp),
+            )
+        }
+        IconButton(onClick = { ui.doneLinks += url; ui.screenLink = null }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Close, "Dismiss", tint = Color(0xFFD9E2FF), modifier = Modifier.size(18.dp))
+        }
+    }
 }
 
 fun keyAction(ui: TerminalUi, a: KeyAction, onTextMode: (TermTab) -> Unit) {

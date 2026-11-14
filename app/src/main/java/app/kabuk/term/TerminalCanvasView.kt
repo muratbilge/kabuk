@@ -381,6 +381,13 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
         return (0 until em.mRows).map { em.screen.getSelectedText(l, it, r, it) }
     }
 
+    /** the lowest http(s) link on screen (the Phone tab's "Open link" chip); null while scrolled back */
+    fun lastScreenLink(): String? {
+        val em = emulator ?: return null
+        if (topRow != 0) return null
+        return lastLinkIn(0, em.mRows - 1, em.mColumns) { rr -> em.screen.getSelectedText(0, rr, em.mColumns - 1, rr) to em.screen.getLineWrap(rr) }
+    }
+
     /** the rows on screen as text, top to bottom */
     fun screenLines(): List<String> {
         val em = emulator ?: return emptyList()
@@ -792,4 +799,20 @@ internal fun linkIn(row: Int, col: Int, l: Int, r: Int, firstRow: Int, lastRow: 
     }
     return urlRegex.findAll(sb).firstOrNull { offset in it.range }?.value
         ?.let { if (it.startsWith("www.")) "https://$it" else it }
+}
+
+/**
+ * The lowest http(s) URL in rows [firstRow]..[lastRow] (whole width [width]), joined across wrapped rows like
+ * [linkIn]; "www." links don't count (programs that want a browser print a scheme).
+ */
+internal fun lastLinkIn(firstRow: Int, lastRow: Int, width: Int, line: (Int) -> Pair<String, Boolean>): String? {
+    for (row in lastRow downTo firstRow) {
+        val text = line(row).first
+        val hits = Regex("https?://", RegexOption.IGNORE_CASE).findAll(text).toList()
+        for (h in hits.asReversed()) {
+            val url = linkIn(row, h.range.first, 0, width - 1, firstRow, lastRow, line) ?: continue
+            if (url.startsWith("http://", true) || url.startsWith("https://", true)) return url
+        }
+    }
+    return null
 }
