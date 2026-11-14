@@ -83,3 +83,33 @@ and the brief for each step. Workers: read both files, then only the step you we
    that the TOOLS self-test lines appear in logcat.
 6. Licences (assets + Settings entry), README section, `docs/LOCAL-TOOLS.md` (step 1 note, verified facts).
 7. Commit(s) `[claude] ...`, write REPORT-claude.md, report back.
+
+## Brief: step 3 (rclone + opening URLs) — second worker
+Step 2 is merged and released as 0.7.0 (busybox, `LocalTools`, `scripts/build-tools.sh`, docs/LOCAL-TOOLS.md:
+read them, extend them; don't restructure). Emulator on DevBox: the user is not in the `kvm` group, so run the AVD
+inside Paperscanner's docker image `paperscanner-emulator-test:bookworm` with `--device /dev/kvm` as
+`/projects/paperscanner/scripts/test-emulator` does (read-only AVD hardio-e2e, own port; the box is often loaded:
+OOM kills happened, retry).
+1. build-tools.sh: rclone (latest stable v1.x, pinned tag + source tarball SHA-256) built from source with
+   `GOOS=android GOARCH=arm64|amd64 CGO_ENABLED=1 CC=<NDK clang --target=<triple>26>` (dynamic against bionic, so DNS
+   works through Android's resolver), `-trimpath -ldflags "-s -w"`, reproducible, cached like busybox; output
+   `librclone.so`. Go module downloads go into ~/.cache/kabuk-tools/gomod (GOMODCACHE), GOFLAGS=-mod=mod is fine.
+   Add rclone to LocalTools.TOOLS (self-test: `rclone version`), licence (MIT + its third-party notices if rclone
+   ships them) in assets/licenses + Settings → Licences.
+2. URL opening: helpers `xdg-open`, `open`, `termux-open-url` in filesDir/bin as `#!/system/bin/sh` scripts (they
+   are run by the kernel via the shebang interpreter in /system/bin, so not exec'd from app data — verify this works
+   under W^X on the emulator; if not, make them busybox-ash functions/aliases in .profile-independent form, e.g. a
+   tiny multi-call mode in a Kabuk lib, and say what you chose). They write the URL into `filesDir/open/<ts>.url`;
+   LocalTab watches the dir (FileObserver) and starts ACTION_VIEW for http/https only. Reserve those names in BinDir.
+   Fallback: when the Phone tab's screen shows an http(s) URL, offer "Open link" (chip or snackbar; keep it simple,
+   one at a time, dismissable). Never log the URL beyond scheme+host.
+3. Verify on the emulator: `rclone version`; DNS works (`rclone lsjson --http-url https://downloads.rclone.org :http:`
+   or similar public listing); `xdg-open https://example.com` from the Phone tab opens the browser (screenshot or
+   `dumpsys activity` showing the browser on top); `rclone authorize "pcloud"` (or another OAuth backend) starts its
+   listener on 127.0.0.1:53682 and the browser is opened on it; a request to `http://127.0.0.1:53682/` from outside
+   the app (e.g. `adb shell` curl/toybox nc, or the browser) reaches rclone while Kabuk is in the background
+   (SessionService keeps it alive). The real pCloud login can't be completed on the emulator — Murat does that.
+4. Release APK size after rclone (arm64 only) — report it; budget ≤ 45 MB.
+5. README Phone tab section + History (label 0.7.1), docs/LOCAL-TOOLS.md, unit tests (URL file → intent filter
+   http/https only, URL detection on screen text, BinDir reserved names). Gate green, commits `[claude] ...`, no push/
+   release/version bump. Report back as text (subagents can't write report files).
