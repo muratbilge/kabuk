@@ -18,7 +18,7 @@ if ! command -v java >/dev/null 2>&1; then
 fi
 # the Phone tab's tools (cached: a copy when nothing changed); a release without them would silently lose the tools
 "$ROOT/scripts/build-tools.sh"
-for tool in busybox; do
+for tool in busybox rclone kabuk-open; do
   [ -s "app/src/main/jniLibs/arm64-v8a/lib$tool.so" ] || { echo "ERROR: $tool missing for arm64-v8a (scripts/build-tools.sh)" >&2; exit 1; }
 done
 ./gradlew --console=plain :app:assembleRelease -q

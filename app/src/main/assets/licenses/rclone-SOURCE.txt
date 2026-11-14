@@ -1,0 +1,23 @@
+rclone in Kabuk: source code
+============================
+
+Kabuk's Phone tab includes rclone 1.76.0 (https://rclone.org), licensed under the MIT licence (see
+rclone-MIT.txt). It is shipped inside the APK as lib/<abi>/librclone.so. rclone is built together with the Go
+modules in its vendor/ directory; their licences and notices are in rclone-THIRD-PARTY.txt. Some of them are
+under the Mozilla Public License 2.0 or the GNU Lesser General Public License 3.0, which ask for their source to
+be available: it is in the vendor tarball below.
+
+Corresponding source (both files are listed in https://downloads.rclone.org/v1.76.0/SHA256SUMS):
+  Source   https://downloads.rclone.org/v1.76.0/rclone-v1.76.0.tar.gz
+  SHA-256  fa2b2e4ae56c4f1b91102285b736596e2a028be77cb2aaa5a0df53f3a7fc5902
+  Vendor   https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-vendor.tar.gz
+  SHA-256  7706e9d6b11971a096406a1e876db3946c73f11a64327a7457545443b13f4cc0
+
+How it is built: scripts/build-tools.sh in Kabuk's source repository (https://github.com/muratbilge/kabuk),
+unmodified source, `go build -mod=vendor -trimpath` with GOOS=android, cgo and the Android NDK r29
+(29.0.14206865) clang for Android API 26, linked dynamically against Android's libc (so name lookups use the
+phone's resolver). Anyone can rebuild and relink it from the files above with that script.
+
+Written offer: for at least three years after you received this version of Kabuk, the author will give
+anyone a copy of the corresponding source above (both tarballs plus the build script) on request,
+free of charge apart from the cost of physically providing it. Ask through Kabuk's GitHub repository.
