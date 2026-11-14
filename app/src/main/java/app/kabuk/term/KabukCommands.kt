@@ -77,12 +77,16 @@ Open a file or URL in an external app.
   --content-type type  specify the content type to use
 """
 
-    /** Request file bytes → (cwd, name, args); null when it isn't a request. */
-    internal fun decode(bytes: ByteArray): Triple<String, String, List<String>>? {
+    /** A decoded request; [keepAlive]: the program understands `<base>.wait` keep-alives ("kabuk-req 2"). */
+    data class Request(val cwd: String, val name: String, val args: List<String>, val keepAlive: Boolean)
+
+    /** Request file bytes → [Request]; null when it isn't one. */
+    internal fun decode(bytes: ByteArray): Request? {
         val parts = String(bytes, Charsets.UTF_8).split('\u0000')
         // NUL-terminated: the last split part is the empty tail
-        if (parts.size < 4 || parts[0] != "kabuk-req 1" || parts.last().isNotEmpty()) return null
-        return Triple(parts[1], parts[2], parts.subList(3, parts.size - 1))
+        if (parts.size < 4 || parts.last().isNotEmpty()) return null
+        val keepAlive = when (parts[0]) { "kabuk-req 1" -> false; "kabuk-req 2" -> true; else -> return null }
+        return Request(parts[1], parts[2], parts.subList(3, parts.size - 1), keepAlive)
     }
 
     /** What [name] with [args], run in [cwd], asks for; [stdin]: the program's input, once handed over. */
@@ -244,7 +248,7 @@ Open a file or URL in an external app.
     // ---- on the phone ----
 
     /** Requests waiting for their stdin (base name → request), dropped after an hour (the program may wait on a tty). */
-    private class Pending(val cwd: String, val name: String, val args: List<String>, val at: Long)
+    private class Pending(val req: Request, val at: Long)
     private val pending = HashMap<String, Pending>()
 
     /** From the watcher thread: read + delete the request, run it on the main thread, write the answer. */
@@ -254,8 +258,7 @@ Open a file or URL in an external app.
         val base = f.name.removeSuffix(".req")
         val req = bytes?.let(::decode)
         if (req == null) { answer(dir, base, Answer(2, "kabuk: unreadable request\n")); return }
-        val (cwd, name, args) = req
-        TabManager.main.post { run(dir, base, cwd, name, args, null) }
+        TabManager.main.post { run(dir, base, req, null) }
     }
 
     /** From the watcher thread: the stdin a request asked for (`<base>.in`). */
@@ -267,25 +270,28 @@ Open a file or URL in an external app.
             val p = pending.remove(base)
             when {
                 p == null -> answerLater(dir, base, Answer(2, "kabuk: input for an unknown request\n"))
-                bytes == null -> answerLater(dir, base, Answer(1, "${p.name}: input too long or unreadable\n"))
-                else -> run(dir, base, p.cwd, p.name, p.args, String(bytes, Charsets.UTF_8))
+                bytes == null -> answerLater(dir, base, Answer(1, "${p.req.name}: input too long or unreadable\n"))
+                else -> run(dir, base, p.req, String(bytes, Charsets.UTF_8))
             }
         }
     }
 
     /** Main thread. */
-    private fun run(dir: File, base: String, cwd: String, name: String, args: List<String>, stdin: String?) {
+    private fun run(dir: File, base: String, req: Request, stdin: String?) {
+        val (cwd, name, args) = req
         val action = runCatching { parse(name, args, cwd, stdin) }
             .getOrElse { e -> KLog.w(TAG, "$name: parse failed", e); Action.Reply(1, "$name: ${e.javaClass.simpleName}\n") }
         if (action is Action.NeedStdin) {
             val now = System.currentTimeMillis()
             pending.entries.removeAll { now - it.value.at > 3_600_000 }
             if (pending.size >= 64) pending.remove(pending.minByOrNull { it.value.at }!!.key)
-            pending[base] = Pending(cwd, name, args, now)
+            pending[base] = Pending(req, now)
             answerLater(dir, base, null, if (action.onlyIfPiped) "stdin-if-piped" else "stdin")
             return
         }
-        val reply = { a: Answer -> answerLater(dir, base, a) }
+        val call = Call(dir, base, name)
+        if (req.keepAlive) call.keepAlive()
+        val reply = { a: Answer -> call.answer(a) }
         val failed = { e: Throwable -> KLog.w(TAG, "$name failed", e); Answer(1, "$name: ${e.javaClass.simpleName}: ${e.message}\n") }
         if (action is Action.Api) {
             val r = action.req
@@ -294,10 +300,73 @@ Open a file or URL in an external app.
                 Thread({ reply(runCatching { TermuxApi.mediaScan(TabManager.app, name, r) }.getOrElse(failed)) }, "cmd-media-scan").start()
                 return
             }
+            // Ctrl-C (the program is gone): its speech stops too
+            if (r is TermuxApi.Req.Speak) call.onGone = { TabManager.main.post { TermuxApi.cancelSpeech(reply) } }
             runCatching { TermuxApi.execute(TabManager.app, name, r, reply) }.onFailure { reply(failed(it)) }
             return
         }
         reply(runCatching { execute(TabManager.app, name, action) }.getOrElse(failed))
+    }
+
+    /** How often a running request gets a keep-alive (kabuk-open waits 10 s), and for how long at most. */
+    private const val KEEP_ALIVE_MS = 3_000L
+    private const val KEEP_ALIVE_MAX_MS = 3_600_000L
+    private val ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "cmd-keepalive").apply { isDaemon = true } }
+
+    /**
+     * One running request. With [keepAlive] it creates `<base>.wait` every [KEEP_ALIVE_MS] until it is answered, so
+     * the program keeps waiting (speech until it is spoken, a long media scan). It stops when the program is gone
+     * (Ctrl-C: kill(pid, 0) says ESRCH); the answer is then dropped instead of left behind in the dir. Answers once.
+     */
+    private class Call(val dir: File, val base: String, val name: String) {
+        private var done = false
+        private var gone = false
+        private var tick: java.util.concurrent.ScheduledFuture<*>? = null
+        private val wait get() = File(dir, "$base.wait")
+        /** runs (on the keep-alive thread) when the program is found gone before the answer */
+        @Volatile var onGone: (() -> Unit)? = null
+
+        fun keepAlive() {
+            val started = System.currentTimeMillis()
+            val pid = pidOf(base)
+            tick = ticker.scheduleWithFixedDelay({
+                synchronized(this) {
+                    if (done || gone) return@synchronized
+                    when {
+                        pid != null && !alive(pid) -> {
+                            gone = true; wait.delete(); tick?.cancel(false)
+                            onGone?.invoke()
+                            KLog.i(TAG, "$name: the program ended before the answer (Ctrl-C?)")
+                        }
+                        System.currentTimeMillis() - started > KEEP_ALIVE_MAX_MS -> tick?.cancel(false)
+                        else -> runCatching { wait.writeBytes(ByteArray(0)) }
+                    }
+                }
+            }, KEEP_ALIVE_MS, KEEP_ALIVE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+
+        fun answer(a: Answer) = Thread({
+            synchronized(this) {
+                if (done) return@synchronized
+                done = true
+                tick?.cancel(false)
+                wait.delete()
+                if (!gone) KabukCommands.answer(dir, base, a)
+            }
+        }, "cmd-answer").start()
+    }
+
+    /** The program's pid from the request's base name (`<ms>-<pid>`). */
+    internal fun pidOf(base: String): Int? = base.substringAfterLast('-', "").toIntOrNull()?.takeIf { it > 0 }
+
+    /**
+     * kill(pid, 0): only ESRCH means the program is gone. Any other refusal counts as alive (a program started
+     * through `adb shell run-as` runs in another SELinux domain: its /proc entry and signals are denied to the app).
+     */
+    private fun alive(pid: Int) = try {
+        android.system.Os.kill(pid, 0); true
+    } catch (e: android.system.ErrnoException) {
+        e.errno != android.system.OsConstants.ESRCH
     }
 
     private fun answerLater(dir: File, base: String, a: Answer?, raw: String? = null) =

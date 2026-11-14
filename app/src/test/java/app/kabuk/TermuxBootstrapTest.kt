@@ -98,6 +98,10 @@ class TermuxBootstrapTest {
         assertTrue(conf.contains("DPkg::Pre-Install-Pkgs { \"/data/data/app.kabuk/files/usr/libexec/kabuk/relocate-debs\"; };"))
         assertTrue(conf.contains("APT::Keep-Downloaded-Packages \"false\";"))
         assertTrue(File(staging, "libexec/kabuk/relocate-debs").canExecute())
+        assertTrue(conf, conf.contains("DPkg::Post-Invoke { \"[ ! -x /data/data/app.kabuk/files/usr/libexec/kabuk/termux-api-sync ] || " +
+            "/data/data/app.kabuk/files/usr/libexec/kabuk/termux-api-sync || true\"; };"))
+        assertTrue(File(staging, "libexec/kabuk/termux-api-sync").canExecute())
+        assertFalse("unchanged the second time (tab start)", TermuxEnv.writeAptHook(staging, File("/data/data/app.kabuk/files/usr"), FsOps.Nio))
         TermuxEnv.writeFirstUpdate(staging, File("/data/data/app.kabuk/files/usr"))
         val first = File(staging, "etc/profile.d/${TermuxEnv.FIRST_UPDATE}").readText()
         assertTrue(first.contains("pkg update"))
@@ -193,5 +197,19 @@ class TermuxBootstrapTest {
         val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
         p.inputStream.readBytes()
         return p.waitFor()
+    }
+
+    /** Phone tabs use Termux only with login and bash; usr without them is "broken" (Repair), no usr is neither. */
+    @Test fun brokenPrefix() {
+        val usr = File(tmp.root, "usr")
+        assertFalse(TermuxEnv.usable(usr)); assertFalse(TermuxEnv.broken(usr))
+        File(usr, "bin").mkdirs()
+        assertTrue(TermuxEnv.broken(usr))
+        File(usr, "bin/login").writeText("x")
+        assertTrue("bash missing", TermuxEnv.broken(usr))
+        File(usr, "bin/bash").writeText("x")
+        assertTrue(TermuxEnv.usable(usr)); assertFalse(TermuxEnv.broken(usr))
+        File(usr, "bin/login").delete()
+        assertTrue(TermuxEnv.broken(usr))
     }
 }

@@ -65,8 +65,10 @@ object TermuxInstaller {
 
     fun supported(ctx: Context) = TermuxEnv.supported(ctx)
     fun installed(ctx: Context) = TermuxEnv.installed(ctx)
+    /** usr is there but login or bash is missing (the Phone tab runs busybox): offer Repair, not Install */
+    fun broken(ctx: Context) = TermuxEnv.supported(ctx) && TermuxEnv.broken(ctx)
 
-    /** A Phone tab was opened: the consent sheet, the first time only. */
+    /** A Phone tab was opened: the consent sheet, the first time only; the Repair sheet when usr is broken. */
     @Synchronized fun phoneTabOpened(ctx: Context) {
         if (!TermuxEnv.supported(ctx)) {
             if (!unsupportedLogged) {
@@ -77,7 +79,16 @@ object TermuxInstaller {
             return
         }
         val m = machine(ctx)
-        if (m.phoneTabOpened()) {
+        val broken = TermuxEnv.broken(ctx)
+        if (m.phoneTabOpened(broken)) {
+            if (broken) {
+                KLog.w(TAG, "offering a repair: usr is there but " +
+                    listOf("login", "bash").filter { !java.io.File(TermuxEnv.prefix(ctx), "bin/$it").isFile }.joinToString(" and ") +
+                    " missing (this tab runs busybox)")
+                hidden.value = false
+                publish(m)
+                return
+            }
             saveOffered(ctx)
             KLog.i(TAG, "offering the install (first Phone tab, arch=${TermuxEnv.arch()})")
             publish(m)
@@ -93,7 +104,7 @@ object TermuxInstaller {
 
     @Synchronized fun notNow() {
         val m = machine ?: return
-        if (m.state == InstallState.Offer) KLog.i(TAG, "not now")
+        if (m.state == InstallState.Offer || m.state == InstallState.OfferRepair) KLog.i(TAG, "not now")
         m.notNow(); publish(m)
     }
 

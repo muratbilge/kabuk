@@ -20,10 +20,14 @@ class KabukCommandsTest {
 
     @Test fun requestFileFormat() {
         val bytes = "kabuk-req 1\u0000/x/y\u0000am\u0000start\u0000-a\u0000a b\u0000".toByteArray()
-        assertEquals(Triple("/x/y", "am", listOf("start", "-a", "a b")), KabukCommands.decode(bytes))
-        assertEquals(Triple("/", "termux-wake-lock", emptyList<String>()), KabukCommands.decode("kabuk-req 1\u0000/\u0000termux-wake-lock\u0000".toByteArray()))
-        assertNull(KabukCommands.decode("kabuk-req 2\u0000/\u0000am\u0000".toByteArray()))
+        assertEquals(KabukCommands.Request("/x/y", "am", listOf("start", "-a", "a b"), keepAlive = false), KabukCommands.decode(bytes))
+        assertEquals(KabukCommands.Request("/", "termux-wake-lock", emptyList(), keepAlive = false), KabukCommands.decode("kabuk-req 1\u0000/\u0000termux-wake-lock\u0000".toByteArray()))
+        // kabuk-open 4: the same request, and it understands keep-alives
+        assertEquals(KabukCommands.Request("/", "am", emptyList(), keepAlive = true), KabukCommands.decode("kabuk-req 2\u0000/\u0000am\u0000".toByteArray()))
+        assertNull(KabukCommands.decode("kabuk-req 3\u0000/\u0000am\u0000".toByteArray()))
         assertNull(KabukCommands.decode("kabuk-req 1\u0000/\u0000am".toByteArray()))
+        assertEquals(1234, KabukCommands.pidOf("1731620000000-1234"))
+        assertNull(KabukCommands.pidOf("garbage"))
     }
 
     /** What termux-tools' own scripts send (termux-wake-lock, termux-open, termux-reload-settings, termux-open-url). */

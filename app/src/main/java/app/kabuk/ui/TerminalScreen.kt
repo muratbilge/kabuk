@@ -375,6 +375,8 @@ private fun TermuxMenuItem(t: LocalTab, close: () -> Unit) {
         !inst.supported(ctx) -> {}
         state.running -> DropdownMenuItem(text = { Text("Installing Termux packages…") },
             onClick = { close(); inst.hidden.value = false })
+        inst.broken(ctx) -> DropdownMenuItem(text = { Text("Repair Termux packages…") },
+            onClick = { close(); inst.confirmRepair.value = true })
         !inst.installed(ctx) -> DropdownMenuItem(text = { Text("Install Termux packages…") },
             onClick = { close(); inst.menu(ctx) })
         else -> {

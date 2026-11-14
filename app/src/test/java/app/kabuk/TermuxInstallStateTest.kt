@@ -103,4 +103,24 @@ class TermuxInstallStateTest {
         assertTrue(m.install())
         assertFalse("an install from the sheet is no repair", m.repairing)
     }
+
+    /** usr there, login or bash missing: the Repair sheet instead of the fresh Install sheet, once per process. */
+    @Test fun brokenPrefixOffersRepairOnce() {
+        val m = InstallMachine(offered = true, installed = false)
+        assertTrue(m.phoneTabOpened(broken = true))
+        assertEquals(InstallState.OfferRepair, m.state)
+        assertFalse("no Install sheet on top", m.phoneTabOpened(broken = true))
+        m.notNow()
+        assertEquals(InstallState.Idle, m.state)
+        assertFalse("once per process", m.phoneTabOpened(broken = true))
+        assertTrue("Repair from the menu still works", m.repair())
+        assertTrue(m.repairing)
+        m.verifying(); m.extracted(1, 1); m.finished()
+        assertTrue(m.installed)
+        // never offered before (fresh install state) but broken: still the Repair sheet, not Install
+        val fresh = InstallMachine(offered = false, installed = false)
+        assertTrue(fresh.phoneTabOpened(broken = true))
+        assertEquals(InstallState.OfferRepair, fresh.state)
+        assertFalse(fresh.install())
+    }
 }

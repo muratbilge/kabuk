@@ -391,7 +391,7 @@ returns at once with empty content.
 | `termux-toast [-s] [-g top\|middle\|bottom] [-b/-c ignored]` | Toast (target 28: gravity works) | toast shown at the bottom (screenshot) |
 | `termux-vibrate [-d ms] [-f]` | one-shot; skipped in silent mode unless `-f` | `CMD: termux-vibrate: 200 ms` (no vibrator to feel) |
 | `termux-torch on\|off` | CameraManager.setTorchMode (no permission) | on/off logged, no error |
-| `termux-tts-speak [-e -l -n -v -p -r -s] [text]` | one TextToSpeech per engine, QUEUE_ADD; answers once queued | error path only: the AVD has no TTS engine → "the text-to-speech engine did not start", exit 1 |
+| `termux-tts-speak [-e -l -n -v -p -r -s] [text]` | one TextToSpeech per engine, QUEUE_ADD; answers once queued (0.8.4: once spoken) | error path only: the AVD has no TTS engine → "the text-to-speech engine did not start", exit 1 |
 | `termux-notification …`, `termux-notification-remove id` | channel "Scripts" (silent; `--sound`/`--vibrate` played per notification); tag `script:<id>`; `--action`, `--buttonN-action`, `--on-delete` → `ScriptActionReceiver` (not exported, immutable explicit PendingIntents) runs `sh -c` in the Phone tab's environment in the background, output discarded; no `--action`: tap opens Kabuk; `--image-path` → big picture; `--priority`, `--led-*`, `--icon`, `--channel` accepted, ignored (Android sets these per channel); `--type media` unsupported | posted with title/content/button (dumpsys + screenshot); button ran `termux-toast` (logged), tap ran `echo tapped > ~/tapped.txt`; remove cleared all three |
 | `termux-share [-a send\|view\|edit] [-c type] [-d] [-t title] [file]` | file via FileProvider (as termux-open), stdin as text (ACTION_SEND, ≤ 200 000 chars); chooser unless `-d` | share sheet "Sharing text / Subject"; file send → chooser; `-d` view → HTML viewer; missing file → exit 1 |
 | `termux-battery-status` | JSON like Termux:API 0.60 (present … cycle) | full JSON, `"plugged": "PLUGGED_AC"` |
@@ -405,9 +405,8 @@ inbox, telephony-call/cellinfo/deviceinfo, camera-photo/info, microphone-record,
 contact-list, call-log, infrared-frequencies/transmit, nfc, usb, wallpaper, dialog, storage-get, saf-* (create,
 dirs, ls, managedir, mkdir, read, rm, stat, write), keystore, job-scheduler, notification-list (needs notification
 access), notification-channel, brightness (needs WRITE_SETTINGS, a special permission), wifi-scaninfo,
-wifi-enable, media-player, speech-to-text, tts-engines, audio-info, api-start/api-stop. Calling the package's own
-`$PREFIX/libexec/termux-api` (or `usr/bin/termux-*` by full path) still hangs waiting for the Termux:API app; only
-the names on PATH are Kabuk's.
+wifi-enable, media-player, speech-to-text, tts-engines, audio-info, api-start/api-stop. (0.8.3: calling the
+package's own `$PREFIX/libexec/termux-api` or `usr/bin/termux-*` by full path still hung; fixed in 0.8.4, below.)
 
 **"Open link" chip and the login message.** `LocalTab` records the transcript at the first keystroke
 (`beforeInput`); until then no chip, and later a URL that appears in that text as a whole (`ScreenLinks.printedBefore`;
@@ -428,3 +427,77 @@ orchestrator's bump).
 text, chooser`, `notification action finished (exit 0)`, `termux-download: queued https://example.com`); never
 clipboard/notification/share/speech text, paths, commands or full URLs. *Verified*: none of the test strings appear
 in any `Kabuk.*` logcat line.
+
+## Polish (0.8.4)
+
+*Verified* on the emulator (android-35 x86_64 in docker, debug build, 2026-11-14) unless marked otherwise.
+Evidence: `~/.cache/kabuk-tools/b8-shots/` (`b8-*.txt`, screenshots).
+
+**Heads-up for `--priority high|max`.** A second channel `scripts-high` "Scripts (important)"
+(IMPORTANCE_HIGH, silent like "Scripts": `--sound`/`--vibrate` are played per notification), made with the others
+in `Notifications.ensureChannels` (so also on an update). default/low/min stay on "Scripts". *Verified*:
+`dumpsys notification` shows `channel=scripts-high importance=4` for high and max, `channel=scripts importance=3`
+for default; the high one appeared as a heads-up over the home screen (`p1-headsup.png`), the default one did not
+(no `NOTIFICATION_HEADS_UP_APPEAR`).
+
+**termux-api's scripts by full path.** `usr/libexec/kabuk/termux-api-sync` (TermuxEnv.kt) runs as apt's
+`DPkg::Post-Invoke` (in `etc/apt/apt.conf.d/99kabuk-relocate`), after `dpkg -i/-r/-P/--configure` through Kabuk's
+dpkg wrapper, and once at tab start when needed (termux-api installed but `libexec/termux-api` isn't Kabuk's stub,
+or the package is gone but Kabuk's diversions stayed). For each of the package's `usr/bin/termux-*` files Kabuk
+answers (all of `TermuxApi.NAMES`, supported or "not supported") it runs `dpkg-divert --local --rename --divert
+usr/libexec/kabuk/termux-api/<name> --add usr/bin/<name>` and puts a symlink to `files/kabuk/bin/<name>` in its
+place; each file the package ships directly in `usr/libexec` (`termux-api`, `termux-api-broadcast`,
+`termux-callback`) becomes a stub that prints "<name>: Kabuk answers termux-* commands itself (no Termux:API app
+needed); call them by name" and exits 1. Upgrades unpack into the diverted names, so the links stay; once the
+package is removed the links/stubs and the diversions are undone (Kabuk's commands keep working by name). The
+hook files are rewritten at every tab start when they differ, so installs from before 0.8.4 get the Post-Invoke
+line too. Not covered: `usr/lib/libtermux-api.so` (for programs linking Termux:API directly) still talks to the
+missing app. *Verified* (termux-api 0.60.0):
+- `apt-get install termux-api` → "kabuk: 60 termux-api files now run Kabuk's commands"; `dpkg-divert --list` has 60
+  entries; `$PREFIX/bin/termux-toast -s hi` shows the toast, rc 0; `$PREFIX/bin/termux-battery-status` answers in
+  0.06 s; `$PREFIX/bin/termux-sms-send` → "not supported in Kabuk", rc 1; `$PREFIX/libexec/termux-api Toast` and
+  `libexec/termux-api-broadcast` → the stub message, rc 1 (no hang).
+- `apt-get install --reinstall termux-api` and an upgrade to a repacked 0.60.1 via `dpkg -i` (the wrapper: relocated,
+  then synced): new contents land in `libexec/kabuk/termux-api/`, the links stay, `$PREFIX/bin/termux-toast` works;
+  `dpkg -V termux-api` prints nothing (rc 0).
+- `apt-get remove termux-api` → "termux-api removed; Kabuk's termux-* commands stay (60 diversions undone)", 0
+  diversions, no files left in `usr/bin`/`libexec`, `termux-toast` by name still works. Same with `dpkg -r` by hand.
+- Old install: Post-Invoke line + sync script removed, termux-api installed (0 diversions) → opening a Phone tab
+  logs "apt hooks updated" and "termux-api package synced at tab start (exit 0 / kabuk: 60 …)"; full path works.
+- Post-Invoke runs while apt holds its lock: `dpkg-divert` there worked without lock errors.
+
+**Keep-alive (kabuk-open 4).** The program now sends `kabuk-req 2` (= "I understand keep-alives"; `kabuk-req 1`
+from older programs still works, without them). While a request runs, Kabuk creates `<base>.wait` every 3 s; the
+program deletes it and restarts its 10 s timer. A separate file, so it never races with `<base>.res`. Kabuk stops
+when the program is gone (`kill(pid, 0)` → ESRCH; any other refusal counts as alive, because a program started via
+`adb shell run-as` is in another SELinux domain) and then drops the answer instead of leaving it in `files/open`;
+at most 1 h. `termux-tts-speak` now answers when the text is spoken (UtteranceProgressListener; the text goes to
+the engine line by line, long lines cut at a space below `getMaxSpeechInputLength`, blank lines dropped; error/stop
+→ exit 1; switching the engine with `-e` ends the old engine's pending requests with exit 1). Speech has its own
+cap: after 30 s + 150 ms per character (at most 10 min) Kabuk stops the engine (`tts.stop()`) and answers exit 1
+"termux-tts-speak: speech did not finish (engine stuck?)"; Ctrl-C (the keep-alive finds the program gone) stops the
+speech too. `tts.stop()` also cuts other queued termux-tts-speak text (those answer exit 1). The cap and Ctrl-C stop
+are unit-tested (formula) but were added after the emulator run below. *Verified* with eSpeak
+NG (F-Droid, installed only into the throwaway emulator):
+- `termux-tts-speak hello from kabuk` → 1.2 s, rc 0, log "spoken (16 chars)"; 540 chars at `-r 0.8` → 39 s, rc 0
+  (keep-alives held it past 10 s), `files/open` empty afterwards; three piped lines with a blank one → rc 0.
+- In the Phone tab: Ctrl-C after 14 s ends the waiting program at once; Kabuk logs "the program ended before the
+  answer (Ctrl-C?)" and leaves no file behind. (In that run, before the change above, the speech went on.)
+- With the engine broken (no voice data yet) the program kept waiting (3 min) until SIGINT; this led to the speech
+  cap above (that case now ends after 30 s + 150 ms per character with exit 1).
+- `termux-media-scan -r` of 30 000 files: "Finished scanning 30000 file(s)" in 1.3 s, rc 0.
+
+**Broken install → Repair.** `TermuxEnv.installed` now needs `usr/bin/login` *and* `usr/bin/bash`; `broken` = `usr`
+exists without them. Then Phone tabs run busybox, and the first Phone tab of a process shows the sheet "Termux
+packages are damaged" (Not now / Repair; Repair starts the repair directly, the sheet says installed packages go
+and home stays) instead of the Install sheet; the Phone tab menu and the Servers screen's ⋮ offer "Repair Termux
+packages…" instead of "Install …", the Servers row says "Termux packages damaged: busybox for now (⋮ → Repair)".
+*Verified*: `bash` renamed → new tab: the sheet, log "offering a repair: usr is there but bash missing"; Not now →
+the tab runs busybox (`SHELL=…/files/bin/sh`, `termux-toast` works); next tab: no sheet; both menus show Repair;
+Repair from the Servers menu → "Termux packages repaired". `login` renamed, fresh process → the sheet ("login
+missing"), its Repair button → repaired, Restart shell → bash with Termux's second stage and the first `pkg update`.
+
+**Logs.** New lines: `CMD termux-tts-speak: spoken (N chars)`, `… the program ended before the answer (Ctrl-C?)`,
+`TERMUX apt hooks updated`, `TERMUX termux-api package synced at tab start (…)`, `TERMUX offering a repair: …`.
+No test text (notification titles/content, spoken text) in any `Kabuk.*` line of the emulator's logcat.
+

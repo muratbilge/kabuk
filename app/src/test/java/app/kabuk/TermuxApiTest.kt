@@ -224,4 +224,56 @@ class TermuxApiTest {
         assertEquals(listOf("a.jpg", "sub/b.mp3"), deep)
         assertEquals(listOf(File(root, "a.jpg").path), TermuxApi.mediaFiles(listOf(File(root, "a.jpg").path, File(root, "missing").path), false))
     }
+
+    @Test fun notificationPriorityPicksTheChannel() {
+        assertEquals(TermuxApi.CHANNEL_HIGH, TermuxApi.channelFor("high"))
+        assertEquals(TermuxApi.CHANNEL_HIGH, TermuxApi.channelFor("max"))
+        for (p in listOf("default", "low", "min")) assertEquals(TermuxApi.CHANNEL, TermuxApi.channelFor(p))
+        val n = (p("termux-notification", "-c", "x", "--priority", "max") as Action.Api).req as Req.Notify
+        assertEquals(TermuxApi.CHANNEL_HIGH, TermuxApi.channelFor(n.n.priority))
+    }
+
+    @Test fun speechCap() {
+        assertEquals(30_000L, TermuxApi.speechCapMs(0))
+        assertEquals(30_150L, TermuxApi.speechCapMs(1))
+        assertEquals(111_000L, TermuxApi.speechCapMs(540))
+        assertEquals(600_000L, TermuxApi.speechCapMs(3_800))
+        assertEquals("at most 10 min", 600_000L, TermuxApi.speechCapMs(1_000_000))
+    }
+
+    /** Text for the engine: line by line, long lines cut at a space below the engine's limit, blanks dropped. */
+    @Test fun speechPieces() {
+        assertEquals(listOf("hello"), TermuxApi.speechPieces("hello\n", 4000))
+        assertEquals(listOf("one", "two"), TermuxApi.speechPieces("one\n\n  two  \n", 4000))
+        assertEquals(emptyList<String>(), TermuxApi.speechPieces("\n \n", 4000))
+        assertEquals(listOf("aaa bbb", "ccc"), TermuxApi.speechPieces("aaa bbb ccc", 8))
+        assertEquals(listOf("abcd", "efgh", "ij"), TermuxApi.speechPieces("abcdefghij", 4))
+        val long = (1..3000).joinToString(" ") { "w$it" }
+        val pieces = TermuxApi.speechPieces(long, 4000)
+        assertTrue(pieces.all { it.length <= 4000 })
+        assertEquals(long, pieces.joinToString(" "))
+    }
+
+    /** termux-api's full-path scripts: the sync script as written, and when the tab start has to run it. */
+    @Test fun termuxApiSyncScript() {
+        val s = TermuxEnv.termuxApiSync("/data/data/app.kabuk/files/usr", "/data/data/app.kabuk/files/kabuk/bin")
+        assertTrue(s.startsWith("#!/data/data/app.kabuk/files/usr/bin/sh\n"))
+        assertTrue(s.contains("for n in termux-clipboard-get termux-clipboard-set "))
+        assertTrue(s.contains(" termux-sms-send "))
+        assertTrue(s.contains("K=/data/data/app.kabuk/files/kabuk/bin\n"))
+        assertTrue(s.contains("--local --rename --divert"))
+        assertTrue(s.contains("Kabuk answers termux-* commands itself"))
+        assertTrue("placeholders replaced", !Regex("@[A-Z]+@").containsMatchIn(s))
+        val usr = tmp.newFolder("usr")
+        File(usr, "var/lib/dpkg/info").mkdirs(); File(usr, "libexec").mkdirs()
+        assertEquals("nothing installed, nothing diverted", false, TermuxEnv.termuxApiNeedsSync(usr))
+        File(usr, "var/lib/dpkg/info/termux-api.list").writeText("x\n")
+        File(usr, "libexec/termux-api").writeText("\u007fELF")
+        assertEquals("installed before 0.8.4", true, TermuxEnv.termuxApiNeedsSync(usr))
+        File(usr, "libexec/termux-api").writeText("#!/x/sh\necho \"termux-api: Kabuk answers termux-* commands itself\"\n")
+        assertEquals(false, TermuxEnv.termuxApiNeedsSync(usr))
+        File(usr, "var/lib/dpkg/info/termux-api.list").delete()
+        File(usr, "var/lib/dpkg/diversions").writeText("${usr}/bin/termux-toast\n${usr}/libexec/kabuk/termux-api/termux-toast\n:\n")
+        assertEquals("removed, Kabuk's diversions left", true, TermuxEnv.termuxApiNeedsSync(usr))
+    }
 }

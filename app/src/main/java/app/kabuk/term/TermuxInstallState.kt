@@ -6,6 +6,8 @@ sealed class InstallState {
     data object Idle : InstallState()
     /** the consent sheet: Install / Not now */
     data object Offer : InstallState()
+    /** usr is there but broken (login or bash missing): Repair / Not now */
+    data object OfferRepair : InstallState()
     /** [total] < 0 while unknown */
     data class Downloading(val bytes: Long, val total: Long) : InstallState()
     data object Verifying : InstallState()
@@ -27,9 +29,22 @@ class InstallMachine(offered: Boolean, installed: Boolean) {
     /** the running (or last finished) install is a repair of an installed prefix */
     var repairing = false; private set
 
-    /** A Phone tab was opened: the first time ever (not installed) the consent sheet comes. True when it did. */
-    fun phoneTabOpened(): Boolean {
-        if (installed || offered || state != InstallState.Idle) return false
+    /** [OfferRepair] was shown in this process (it comes once per process, then only the menus offer Repair) */
+    var repairOffered = false; private set
+
+    /**
+     * A Phone tab was opened: the first time ever (not installed) the consent sheet comes; with a [broken] prefix
+     * (usr there, login or bash missing) the Repair sheet instead, once per process. True when a sheet came.
+     */
+    fun phoneTabOpened(broken: Boolean = false): Boolean {
+        if (state != InstallState.Idle) return false
+        if (broken) {
+            if (repairOffered) return false
+            repairOffered = true
+            state = InstallState.OfferRepair
+            return true
+        }
+        if (installed || offered) return false
         offered = true
         state = InstallState.Offer
         return true
@@ -44,7 +59,7 @@ class InstallMachine(offered: Boolean, installed: Boolean) {
     }
 
     /** Not now / sheet dismissed: busybox stays, asked again only from the menu. */
-    fun notNow() { if (state == InstallState.Offer) state = InstallState.Idle }
+    fun notNow() { if (state == InstallState.Offer || state == InstallState.OfferRepair) state = InstallState.Idle }
 
     /** Install (from the sheet) or Retry (after a failure). True when the installer should start. */
     fun install(): Boolean {
