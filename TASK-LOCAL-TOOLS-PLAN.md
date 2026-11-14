@@ -305,3 +305,25 @@ new code is added; gate green; commits [claude]; report as text (REPORT-claude.m
 - `termux-tts-speak` returns when queued (10 s answer limit); one silent "Scripts" channel, no heads-up for --priority high
 - emulator (x86_64) mirror termux.librehat.com gave 404; with usr/bin/login missing, the "Install" offer may show where Repair fits
 - not checked on hardware: speech, vibration, torch, notification --sound/--vibrate/--image-path/--ongoing
+
+### Phone result 0.8.3 (2026-11-14 23:20, CPH2449): toast, battery-status, clipboard set/get, torch, notification +
+button action all ok; vibrate skipped (phone in silent mode, like Termux; -f forces). Pushed d15d3a3 on Murat's OK.
+
+### Brief: B8 — polish (release 0.8.4)
+1. termux-notification `--priority high|max`: a second channel "Scripts (important)" (IMPORTANCE_HIGH, heads-up);
+   default/low/min stay on "Scripts". Channel created with the others (Notifications.kt).
+2. Full-path calls: after `pkg install termux-api`, `$PREFIX/bin/termux-*` (and `$PREFIX/libexec/termux-api`) called
+   by full path wait forever for the Termux:API app. Make them Kabuk's: prefer `dpkg-divert --local --rename` of
+   the package's usr/bin/termux-* files we implement, replaced by symlinks to Kabuk's (files/kabuk/bin) — done by the
+   relocate-debs hook / a DPkg::Post-Invoke step so it survives upgrades; `libexec/termux-api` itself → a tiny script
+   printing "termux-api: Kabuk answers termux-* commands itself; call them by name" exit 1 (no hang). Test: install,
+   upgrade/reinstall termux-api, `$PREFIX/bin/termux-toast hi` works, `dpkg -V termux-api` noise acceptable, remove
+   package cleanly (`pkg uninstall termux-api` leaves Kabuk's commands working).
+3. Long-running answers: a keep-alive in the kabuk-open protocol (Kabuk writes "wait" as .res, program resets its
+   10 s timer; Ctrl-C still works) so `termux-tts-speak` returns when speech is done (UtteranceProgressListener),
+   and termux-download / media-scan of many files don't time out. Bump kabuk-open VERSION 4, protocol stays
+   compatible with old answers.
+4. Broken install (usr present, usr/bin/login or bash missing): the Phone tab offers "Repair Termux packages"
+   instead of the fresh "Install" sheet; busybox fallback stays.
+Emulator evidence per point (docker emulator as before, logsinkToken empty), docs + History 0.8.4, tests, gate
+green, commits [claude], REPORT-claude.md; no version bump/release/push.
