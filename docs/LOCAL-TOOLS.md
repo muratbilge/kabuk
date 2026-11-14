@@ -12,7 +12,7 @@ dir (W^X; SELinux denies `execute` on `app_data_file` for `untrusted_app`). Term
 targetSdk 28. The files the package installer extracts to `applicationInfo.nativeLibraryDir` (`/data/app/…/lib/<abi>`,
 label `apk_data_file`) can be exec'd. So:
 
-- every tool is a static executable shipped as `app/src/main/jniLibs/<abi>/lib<name>.so`;
+- every tool is an executable (linked against bionic) shipped as `app/src/main/jniLibs/<abi>/lib<name>.so`;
 - `packaging.jniLibs.useLegacyPackaging = true` makes the installer extract them (otherwise they stay inside the APK);
 - `filesDir/bin/<name>` is a **symlink** to `<nativeLibraryDir>/lib<name>.so`: exec follows the link, the inode that
   is exec'd stays in nativeLibraryDir. Nothing is ever exec'd from filesDir or cacheDir.
@@ -27,32 +27,38 @@ that `adb shell run-as` is not proof either way: it runs in a different domain.
 | | debug APK | release APK |
 |---|---|---|
 | ABIs with tools | arm64-v8a, x86_64 (emulator) | arm64-v8a only (`ndk.abiFilters` in the release build type) |
-| busybox | 1.24 MB per ABI, uncompressed | stored compressed in the APK (legacy packaging) |
+| busybox | 0.71 MB per ABI (dynamic since 0.7.2; 1.24 MB static before), uncompressed | 0.44 MB compressed in the APK (legacy packaging) |
 | rclone | 88.6 MB arm64 / 120.9 MB x86_64, uncompressed | 28.3 MB compressed in the APK |
 | kabuk-open | 7 KB | |
 
 Budget for busybox + rclone: release ≤ 45 MB. Step 3 (rclone): release APK 43.9 MB (43,947,973 bytes, unsigned Gradle output; was 15.5 MB with busybox
 only); debug APK with both ABIs ~96 MB. On the phone the installer extracts the libraries, so the installed app takes
-~90 MB more than the APK.
+~90 MB more than the APK. Step 3b (dynamic busybox): release APK 43.7 MB (43,675,497 bytes, unsigned Gradle output).
 
 ## busybox build (`scripts/build-tools.sh`)
 
 - Source: `https://busybox.net/downloads/busybox-1.37.0.tar.bz2`,
   SHA-256 `3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4` (checked on every build).
-- Toolchain: NDK 29.0.14206865 clang, `--target=<aarch64|x86_64>-linux-android35`, `CONFIG_STATIC=y` against the
-  NDK's bionic `libc.a`. A static binary carries its libc, so API 35 only selects headers (glob, getrandom, syncfs
-  are declared from API 28) and does not raise the app's minSdk 26. No zig/musl needed.
+- Toolchain: NDK 29.0.14206865 clang, `--target=<aarch64|x86_64>-linux-android28`, linked **dynamically** against
+  bionic (`CONFIG_STATIC` off; the script refuses a static config). Only a dynamic bionic program loads
+  `libnetd_client.so` and so resolves names through netd (see "Network" below); 0.7.0/0.7.1 shipped a static
+  build that had no DNS. API 28 because busybox uses glob, getrandom and syncfs (bionic API 28): **busybox needs
+  Android 9+**. The app's minSdk stays 26; on Android 8.x the linker refuses the binary, the self-test logs
+  `busybox: FAILED (…)`, `LocalTools` does not use it as the shell (`BUSYBOX_MIN_SDK`) and the Phone tab is
+  `/system/bin/sh` as without busybox. No zig/musl needed.
+  `readelf -d`: NEEDED `libm.so`, `libdl.so`, `libc.so` only; interpreter `/system/bin/linker64`; FLAGS BIND_NOW,
+  PIE (both ABIs, *verified*).
 - Config: `defconfig`, then off: applets that don't build against bionic (hush, mount, swapon, tc, ifconfig/arp,
   ipcs, minix fs, utmp/wtmp users), need root/setuid or a console (whole `console-tools` except `clear`/`reset`,
   `init`, `loginutils`, `modutils`, `sysklogd`, `runit`, `selinux`, servers like httpd/telnetd/ntpd/crond),
   `nslookup` (needs libresolv), x86 SHA-NI code (doesn't build for arm64 in 1.37.0), and busybox's own
   passwd/group reader (bionic's `getpwuid` knows Android ids: `id` → `uid=10150(u0_a150)`, *verified*).
   Result: 264 applets, all of the requested list among them.
-- Two source edits, applied by the script: busybox's own `getsid`/`sethostname`/`adjtimex`
-  (`libbb/missing_syscalls.c`) and `strchrnul` (`include/platform.h`) are limited to old Android API levels, because
-  bionic's static libc defines them too (duplicate symbols at link time).
+- No source edits. (The static build needed two, because busybox's own `getsid`/`sethostname`/`adjtimex`/`strchrnul`
+  clashed with bionic's `libc.a`; against `libc.so` the duplicates are harmless and the edits were dropped.)
 - Cache: `~/.cache/kabuk-tools/busybox-1.37.0-<abi>/` with `libbusybox.so`, the final `busybox.config` and a stamp
-  (hash of the script); a re-run is a copy, an edited script rebuilds. `scripts/release.sh` runs the script first
+  (hash of `build_busybox` and the busybox settings, `tool_stamp` in the script; every tool has its own stamp, so
+  a busybox change does not rebuild rclone); a re-run is a copy, an edited busybox part rebuilds busybox. `scripts/release.sh` runs the script first
   and refuses to release when a tool is missing for arm64-v8a.
 
 busybox decides which applet to run from the basename of `argv[0]`, so `libbusybox.so` called by its own name
@@ -141,14 +147,24 @@ Note: rclone's failure page for a wrong state shows the expected state; harmless
 
 ## Bin dir, shell and environment (`term/LocalTools.kt`)
 
-- On every Phone-tab start `LocalTools.prepare` checks `files/bin/.stamp` = `<versionCode> <nativeLibraryDir>`.
+- On every Phone-tab start `LocalTools.prepare` checks `files/bin/.stamp` = `<versionCode> <nativeLibraryDir>
+  <BinDir.LAYOUT>` (LAYOUT is bumped when the set of links changes).
   The path is part of the stamp because nativeLibraryDir changes on every install, also a reinstall with the same
   versionCode (*verified*: `adb install -r` → new `/data/app/~~…/` path → bin rebuilt, links point to the new dir).
 - Rebuild: `bin.new/` gets `busybox -> lib…/libbusybox.so`, then `bin.new/busybox --list` (5 s limit) and one
   link per applet; names of later Kabuk tools and helper scripts are never taken by an applet. Then `bin.new`
   replaces `bin`.
+- Applets Android does better are not linked (`LocalTools.PREFER_SYSTEM`: `ping`, `ping6`, `traceroute6`), so PATH
+  finds `/system/bin/…`. busybox ping wants a raw socket (`ping: permission denied (are you root?)` on the phone);
+  Android's ping uses ICMP "ping sockets", which apps may open. Android 15 has `ping`, `ping6`, `traceroute6`,
+  `tracepath` in `/system/bin` but no IPv4 `traceroute`, so busybox keeps that one (it needs root too).
+  *Verified*: `which ping` → `/system/bin/ping`; `ping -c1 google.com` → 1 received, exit 0; `ping -c1 1.1.1.1` ok.
 - Shell: `files/bin/sh` (busybox ash) with argv[0] `-sh` = login shell. `~/.profile` is written once (PS1, two
   aliases) and never overwritten (*verified*). Without busybox in the APK: `/system/bin/sh` as before.
+- `<files>` is `filesDir.canonicalFile`: `filesDir` is `/data/user/0/app.kabuk/files`, a path through a
+  symlink; the shell's cwd read back with getcwd is `/data/data/app.kabuk/files/home`, and ash's `\w` only shows `~`
+  when HOME is that same string. 0.7.1 showed `/data/data/app.kabuk/files/home $`; now `~ $` (*verified*:
+  `HOME=PWD=pwd=/data/data/app.kabuk/files/home`).
 - Environment: `PATH=<files>/bin:/system/bin:/system/xbin`, `HOME=<files>/home`, `TMPDIR=<cache>/tmp` (created),
   `SHELL=<files>/bin/sh`, `PREFIX=<files>`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=en_US.UTF-8`,
   `ANDROID_DATA`, `ANDROID_ROOT`.
@@ -170,13 +186,15 @@ about the missing home directory).
 or `busybox: FAILED (exit 126 / Permission denied …)` / `busybox: missing (not in this APK)`. This is how exec on
 Murat's phone is verified: he opens a Phone tab after the update, the orchestrator reads `debug/CPH2449.log`.
 
-## Network: DNS in static binaries
+## Network: DNS
 
-*Verified* on the emulator: busybox `wget http://example.com` → `bad address 'example.com'`, while
-`wget http://1.1.1.1/` connects (and then fails on the redirect to a host name). Android has no `/etc/resolv.conf`;
-apps resolve names through netd (`/dev/socket/dnsproxyd`), which a dynamically linked bionic program reaches via
-`libnetd_client.so`. A static binary does not load it. Not fixed for busybox. rclone links bionic dynamically and
-resolves names fine (see above); for wget/nc a dynamically linked helper would be needed. busybox wget also has no TLS certificate validation ("TLS certificate validation not implemented").
+Android has no `/etc/resolv.conf`; apps resolve names through netd (`/dev/socket/dnsproxyd`), which a dynamically
+linked bionic program reaches via `libnetd_client.so`. A static binary does not load it: the static busybox of
+0.7.0/0.7.1 answered `wget http://example.com` with `bad address 'example.com'` (on the phone also
+`ping google.com`). Since 0.7.2 busybox is linked dynamically and resolves names like rclone. *Verified* in the
+Phone tab (emulator, 0.7.2 debug build): `wget -O- http://example.com | head -3` → `Connecting to example.com
+(172.66.147.243:80)` and the page; `nc -z example.com 80` → exit 0; `ping -c1 google.com` (→ `/system/bin/ping`)
+→ 1 received. `ping6` has no IPv6 route on the emulator (100% loss, no error). busybox wget also has no TLS certificate validation ("TLS certificate validation not implemented").
 
 ## Licences
 

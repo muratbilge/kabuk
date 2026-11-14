@@ -116,8 +116,10 @@ HOME is the app's own folder, `TMPDIR` its cache.
 - The tools ship inside the APK (`lib<name>.so`, built from pinned sources by `scripts/build-tools.sh`), because
   Android only lets an app run programs from the folder its native libraries are installed to; Kabuk links them
   into `files/bin`. They come with app updates; there is no `pkg install`.
-- Known gap: busybox `wget` and `nc` can't look up host names yet (a static binary has no route to Android's DNS
-  resolver); addresses work. rclone is not affected. Details and the design: `docs/LOCAL-TOOLS.md`.
+- Host names work in busybox's `wget`, `nc`, `telnet` too (busybox is linked against Android's libc, so it uses
+  Android's DNS). `ping`, `ping6` and `traceroute6` are Android's own (`/system/bin`): busybox's would need root.
+  The tools need Android 9 or newer; on 8.x the Phone tab is Android's plain `sh`. Details and the design:
+  `docs/LOCAL-TOOLS.md`.
 - The live log gets one line per tool when the first Phone tab opens (`TOOLS busybox: ok (BusyBox v1.37.0 …)`,
   `TOOLS rclone: ok (rclone v1.76.0)`), and `OPEN` lines with only the scheme and host of a link that was opened,
   never what you type and never a link's path or query (OAuth codes live there).
@@ -188,6 +190,11 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.7.2 — Phone tab fixes.** busybox is linked dynamically against bionic (API 28), so `wget`/`nc`/`telnet`
+  resolve host names (the static build had no DNS on Android); busybox source no longer patched. `ping`, `ping6`,
+  `traceroute6` come from `/system/bin` (busybox's wanted root). The prompt shows `~ $` (HOME is the canonical
+  path the shell sees). The tools now need Android 9+ (8.x falls back to `/system/bin/sh`). The build script
+  stamps each tool separately, so a busybox change no longer rebuilds rclone.
 - **0.7.1 — rclone and opening links.** rclone 1.76.0 built from its release tarballs for Android (Go + cgo,
   linked against bionic, so DNS works) ships as `librclone.so`; `xdg-open`/`open`/`termux-open-url` link to a
   tiny `libkabuk-open.so` that hands the URL to Kabuk, which opens http(s) links in the browser (a script can't do
