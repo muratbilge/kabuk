@@ -397,7 +397,7 @@ returns at once with empty content.
 | `termux-battery-status` | JSON like Termux:API 0.60 (present … cycle) | full JSON, `"plugged": "PLUGGED_AC"` |
 | `termux-wifi-connectioninfo` | JSON; needs ACCESS_WIFI_STATE (normal permission, added); SSID/BSSID need location: `"<unknown ssid>"`, never asks | `"ip": "10.0.2.16"`, `"ssid": "<unknown ssid>"` |
 | `termux-volume [stream volume]` | JSON array of call/system/ring/music/alarm/notification; set clamps to max; DND refusal → clear error | list; `music 3` then 3; bad stream → usage, exit 1 |
-| `termux-media-scan [-r] [-v] path…` | MediaScannerConnection; dirs: their files, `-r` the tree; links never followed (Files.walkFileTree without FOLLOW_LINKS); off the main thread; "Finished scanning N file(s)" | `/sdcard/Download/kt`: 2 files with `-r -v`; a link to `$PREFIX/bin` inside the tree was not entered |
+| `termux-media-scan [-r] [-v] path…` | MediaScannerConnection; dirs: their files, `-r` the tree; links never followed (Files.walkFileTree without FOLLOW_LINKS); off the main thread; "Finished scanning N file(s)" | `/sdcard/Download/kt`: 2 files with `-r -v`; in `~/kt` a link to `$PREFIX/bin` was not entered (2 files, not hundreds) |
 | `termux-download [-t] [-d] [-p path] url` | DownloadManager, http(s) only; default: the public Download folder | `https://example.com/` → `/sdcard/Download/downloadfile.bin` (577 bytes) |
 
 **Not supported** (exit 1, "`<name>`: … is not supported in Kabuk (there is no Termux:API app…)"): sms-send/list/
