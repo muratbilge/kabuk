@@ -327,3 +327,6 @@ button action all ok; vibrate skipped (phone in silent mode, like Termux; -f for
    instead of the fresh "Install" sheet; busybox fallback stays.
 Emulator evidence per point (docker emulator as before, logsinkToken empty), docs + History 0.8.4, tests, gate
 green, commits [claude], REPORT-claude.md; no version bump/release/push.
+
+### B8 released as 0.8.4 (40), 2026-11-15. Open: Ctrl-C/stop cuts all queued speech; usr/lib/libtermux-api.so still
+talks to the missing app; "+" menu hides "Phone (busybox)" while the install is damaged; nothing yet on hardware.
