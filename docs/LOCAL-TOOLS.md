@@ -212,3 +212,80 @@ committed file only changes with a new rclone). Among them are MPL-2.0 and one L
 (`github.com/cloudsoda/sddl`); their source is in the vendor tarball named in `rclone-SOURCE.txt`, and the build
 script lets anyone relink. The Licences dialog shows long texts paragraph by paragraph in a lazy list (the notices
 are ~500 KB).
+
+## Phase B: Termux packages (0.8.1, `term/TermuxEnv.kt`, `TermuxInstaller.kt`, `TermuxBootstrap.kt`)
+
+Kabuk targets SDK 28 since 0.8.0, so the SELinux domain is `untrusted_app_27`, which may exec files in the app's
+data dir (W^X starts at target 29). That lets Termux's own packages run from `files/usr`, unchanged except for
+their prefix. Everything below is *verified* on the emulator (android-35 x86_64, 0.8.1 debug build, 2026-11-14),
+both on a fresh install and on an upgrade from a 0.8.0 build.
+
+**Relocation.** Termux builds every package for `/data/data/com.termux/files/usr`. `com.termux` (10 bytes) and
+`app.kabuk/` have the same length, so binaries are rewritten in place: `data/data/com.termux` →
+`data/data/app.kabuk/` (`/data/data/app.kabuk//files/usr` is a valid path; ELF strings, RUNPATH, .pyc keep their
+offsets). Text files (no NUL byte) get the clean `data/data/app.kabuk`. `SYMLINKS.txt` targets likewise. dpkg's
+conffile MD5s (`var/lib/dpkg/status`) and `info/*.md5sums` are recomputed from the relocated files, otherwise every
+upgrade would ask about "modified" conffiles (510 checksums in the 2026.11.08 bootstrap). Only works for user 0
+(`/data/data/app.kabuk/files` must be the same inode as `filesDir`: on Android 15 `/data/user/0` and `/data/data`
+are separate mounts, so the canonical paths differ and `Files.isSameFile` is the check) and for arm64/x86_64.
+
+**Bootstrap.** Pinned in `TermuxEnv.BOOTSTRAP_TAG` + `SHA256` per arch (`bootstrap-2026.11.08-r1+apt.android-7`,
+aarch64 33.1 MB, x86_64 33.0 MB; 3780 entries, 3484 files, 88 MB + 1215 links). `scripts/termux-bootstrap-pin.sh`
+prints the newest tag and the digests from the GitHub API (`VERIFY=1` downloads and checks them) as Kotlin lines.
+The install (a thread; `TabManager.keepAlive` keeps `SessionService` running even with no tab open):
+1. free space ≥ 250 MB, else a message;
+2. download `github.com/termux/termux-packages/releases/download/<tag>/bootstrap-<arch>.zip` into
+   `cacheDir/termux/…zip.part`, resuming with `Range` after a broken connection (*verified*: cut at 28 MB, Retry
+   fetched 4856 KB), then SHA-256; a mismatch deletes it;
+3. extract entry by entry (`ZipFile`, one entry in memory at a time) with relocation into `files/usr-staging`;
+   programs (`bin/`, `libexec`, apt's methods/helper) 0700 as the Termux app does;
+4. dpkg checksums, the apt hook, the mirror choice and the first-update script into the staging dir;
+5. one `rename` to `files/usr`; the zip is deleted.
+Cancel (polled per 64 KB and per entry) or a failure removes `usr-staging`; Cancel and non-network failures also the
+partial download, network failures keep it for Retry. A process killed mid-install leaves `usr-staging`, removed the
+next time the installer is used. Emulator timings: download 32 MB 7.7 s, extract + relocate 12-29 s (DevBox under load).
+
+**apt hook.** `etc/apt/apt.conf.d/99kabuk-relocate`: `DPkg::Pre-Install-Pkgs` runs
+`usr/libexec/kabuk/relocate-debs` on every .deb before dpkg: `dpkg-deb -R`, move `data/data/com.termux` →
+`data/data/app.kabuk`, rewrite contents (binary same length, text clean) back into the same inode (`sed -i` would
+reset modes), symlink targets, regenerate md5sums, maintainer scripts 0755 (`dpkg-deb -b` refuses others), repack
+uncompressed. `APT::Keep-Downloaded-Packages "false"`: the repacked .debs are uncompressed and would fill the cache
+(after `pkg install python git`: `cache/` 5.3 MB). The hook is unit-tested against a real `dpkg-deb` on DevBox
+(`TermuxBootstrapTest.relocateDebsHook`).
+
+**Mirror and first login.** `etc/termux/chosen_mirrors` → `mirrors/europe` (what `termux-change-repo` makes): pkg
+tests that group and picks by weight (B0 without it got Chinese mainland mirrors). `etc/profile.d/
+zz-kabuk-first-update.sh` runs after Termux's own second stage (`01-termux-bootstrap-second-stage-fallback.sh`) on
+the first interactive login, does `pkg update` and removes itself when that worked; offline it says so and tries
+again in the next shell. *Verified*: "Picking mirror: … chosen_mirrors/packages.termux.dev" / "termux.3san.dev",
+"Kabuk: ready".
+
+**The Phone tab.** With `files/usr/bin/login` present a Phone tab runs `login` (argv0 `-login`, cwd `files/home`,
+the same HOME as busybox, so `~` survives the switch) with Termux's environment (`PREFIX`, `TMPDIR=$PREFIX/tmp`,
+`TERMUX_*`, `LD_PRELOAD` from termux-exec set by login) and `PATH=files/kabuk/bin:$PREFIX/bin`. `files/kabuk/bin`
+(not owned by a package) holds `termux-setup-storage` (a script) and `xdg-open`/`termux-open-url`/`kabuk-open`,
+links to `libkabuk-open.so`, re-linked on every tab start because nativeLibraryDir moves on updates. busybox stays:
+"Phone (busybox)" (+ menu, Servers screen ⋮) opens the old shell; the busybox self-test still runs.
+*Verified*: `bash 5.3.20`, `u:r:untrusted_app_27`, `pkg install python git` (with their dependencies),
+`python3 -c 'import ssl,sqlite3'` → 3.14.10, `git init/commit`.
+
+**Consent and UI.** `InstallMachine` (pure, `TermuxInstallStateTest`): the first Phone tab (pref `termux/offered`)
+→ sheet Install / Not now; Not now = Idle, asked again only from "Install Termux packages…"; Install →
+Downloading(bytes,total) → Verifying → Extracting(done,total) → Done | Failed(message) → Retry; Cancel → Idle;
+progress after a cancel is ignored. `ui/TermuxUi.kt` shows it as a bottom sheet over every screen; Hide lets it run
+in the background, the result sheet comes anyway. Done offers "Restart shell" (closes busybox Phone tabs, opens a
+Termux one) or "Open Phone tab".
+
+**Storage.** `READ/WRITE_EXTERNAL_STORAGE` + `requestLegacyExternalStorage`; at target 28 that is the legacy /sdcard
+view. `termux-setup-storage` drops `files/open/storage.req`; `UrlOpener` sees it and `StorageAccess` brings Kabuk
+forward with the system dialog ("Allow Kabuk to access photos, videos, music, audio, and other files"), then makes
+`~/storage/{shared,downloads,dcim,pictures,music,movies,documents}`. *Verified*: read a file adb put in Download,
+wrote one back.
+
+**Logs.** Tag `TERMUX`: offered / not now / install / retry / cancel, the result (`installed: downloaded 32263 KB in
+7750 ms; 3484 files (88 MB, 695 relocated, 336 binary), 1215 links, 510 dpkg checksums fixed, extract 12005 ms`),
+failures with the exception class (`install failed: UnknownHostException …`); tag `STORAGE`. Never file contents,
+never terminal text.
+
+**Not yet (B3/B4).** `termux-am`, `termux-wake-lock`, `termux-open` and other termux-tools commands that talk to the
+Termux app; a reinstall/repair of a broken prefix (today: "Phone (busybox)", then delete `files/usr` by hand).

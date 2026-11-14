@@ -56,7 +56,7 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
                 InstallState.Offer -> {
                     Title("Install Termux packages")
                     Body(
-                        "~${TermuxEnv.DOWNLOAD_MB} MB download, ~${TermuxEnv.INSTALLED_MB} MB on the phone; then `pkg install` " +
+                        "~${TermuxEnv.DOWNLOAD_MB} MB download, ~${TermuxEnv.INSTALLED_MB} MB on the phone; then pkg install " +
                             "works like in Termux (python, git, openssh, nodejs, clang …), with bash as the Phone tab's shell."
                     )
                     Body(
@@ -93,7 +93,7 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
                     Title("Termux packages installed")
                     Body(
                         "New Phone tabs start bash. The first one fetches the package lists (pkg update); then " +
-                            "try `pkg install python`."
+                            "try: pkg install python"
                     )
                     if (open.isNotEmpty()) Body("Your open Phone tab still runs busybox.", muted = true)
                     Buttons {

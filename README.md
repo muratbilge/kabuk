@@ -115,7 +115,7 @@ HOME is the app's own folder, `TMPDIR` its cache.
   offers it (× hides it). In the background Kabuk can't bring up the browser itself; a snackbar with "Open" waits.
 - The tools ship inside the APK (`lib<name>.so`, built from pinned sources by `scripts/build-tools.sh`), because
   Android only lets an app run programs from the folder its native libraries are installed to; Kabuk links them
-  into `files/bin`. They come with app updates; there is no `pkg install`.
+  into `files/bin`. They come with app updates (Termux packages, below, come from Termux).
 - Host names work in busybox's `wget`, `nc`, `telnet` too (busybox is linked against Android's libc, so it uses
   Android's DNS). `ping`, `ping6` and `traceroute6` are Android's own (`/system/bin`): busybox's would need root.
   The tools need Android 9 or newer; on 8.x the Phone tab is Android's plain `sh`. Details and the design:
@@ -124,7 +124,27 @@ HOME is the app's own folder, `TMPDIR` its cache.
   `TOOLS rclone: ok (rclone v1.76.0)`), and `OPEN` lines with only the scheme and host of a link that was opened,
   never what you type and never a link's path or query (OAuth codes live there).
 
-Not included: Termux's package system (`pkg install`). Your server is the Linux machine.
+#### Termux packages (`pkg install`)
+Since 0.8.1 the Phone tab can run Termux's own packages: python, git, openssh, nodejs, clang, and the rest of
+Termux's collection, with bash as the shell.
+- **Asked once, never installed silently.** The first Phone tab after the update shows a sheet: "Install Termux
+  packages: ~33 MB download, ~100 MB on the phone" with Install / Not now. Not now keeps the busybox shell; the
+  sheet then comes back only from a menu: "Install Termux packages…" in the Phone tab's menus (⋮ or long-press the
+  tab) and on the Servers screen (⋮ on the Phone shell row).
+- While it installs: a progress bar (downloaded MB, then unpacked files), Cancel (removes everything it wrote) and
+  Hide (it carries on in the background, the "sessions" notification says "Installing Termux packages"). Offline or
+  a broken connection: a message with Retry; a half-finished download resumes where it stopped.
+- Done: new Phone tabs start Termux's login shell (bash); an open busybox Phone tab gets "Restart shell". The first
+  login runs Termux's setup and `pkg update` once (mirrors from Termux's Europe group); then `pkg install <name>`.
+  `termux-setup-storage` asks Android for storage access and links `~/storage/{shared,downloads,dcim,…}`.
+- busybox stays as the recovery shell: "Phone (busybox)" in the + menu and on the Servers screen.
+- How it works: Termux's packages are built for `/data/data/com.termux`; Kabuk downloads Termux's bootstrap (pinned
+  version, SHA-256 checked) and rewrites that path to `/data/data/app.kabuk` while unpacking, and an apt hook does
+  the same to every package before it is installed. That is why Kabuk targets SDK 28 (like Termux).
+- 64-bit phones only (arm64; x86_64 for the emulator). Termux:API-style commands that talk to the Termux app
+  (`termux-open`, `termux-wake-lock`, `am`) don't work yet; `xdg-open`/`termux-open-url` do.
+- Packages are downloaded by you, from Termux's repositories; Kabuk doesn't ship them. Details:
+  `docs/LOCAL-TOOLS.md`, "Phase B".
 
 ### Updates and logs
 - **In-app updater** (Settings → Update → Check for update): `update.json` is signed with a key whose public half
@@ -171,6 +191,7 @@ term/   TermTab (one tab) → SshTab (sshj, reconnect loop, the orch/herdr strea
         TerminalCanvasView: draws with Termux's TerminalRenderer; own touch, selection and keyboard handling
         TabManager: all tabs, prompts for background threads, clipboard; Themes
         LocalTools: the Phone tab's bin dir (links into nativeLibraryDir), environment, self-test
+        TermuxEnv/TermuxInstaller: Termux's bootstrap (download, relocate, apt hook), consent + progress state
         UrlOpener: xdg-open's URLs (files/open, FileObserver) → the browser; the "Open link" chip
 agents/ Orch (orchtool: watch stream, answers, bus, workspaces), Herdr (herdr CLI over SSH), AnswerLedger (answer
         once), AgentNotifier + AnswerReceiver (needs-you / asks-you / finished notifications with answer buttons)
@@ -190,6 +211,11 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.8.1 — Termux packages.** The Phone tab can install Termux's official packages (`pkg install python git …`)
+  after asking once (~33 MB download, ~100 MB on the phone): Termux's bootstrap is downloaded, SHA-256 checked and
+  relocated to Kabuk's data dir while unpacking, with progress, Cancel and Retry (a broken download resumes); an
+  apt hook relocates every package. New Phone tabs then run bash; the first login runs `pkg update` with a Europe
+  mirror. `termux-setup-storage` links `~/storage`. busybox stays as "Phone (busybox)".
 - **0.8.0 — targetSdk 28, groundwork for Termux packages.** Kabuk targets SDK 28 (the level Termux stays on: it
   may run programs from its own data dir), so `pkg install` of Termux packages can follow. The system bars are
   dark explicitly (below target 35 "auto" gave dark icons and a light navigation bar). Notifications: a target-28
@@ -267,7 +293,8 @@ the notices of its Go modules in the same place).
 Apache License 2.0, see `LICENSE`. Uses Termux's terminal-emulator and terminal-view (Apache 2.0), sshj
 (Apache 2.0), Bouncy Castle (MIT) and the JetBrains Mono font (SIL OFL 1.1, `FONT-LICENSE-OFL.txt`). The APK
 also contains BusyBox (GPL-2.0) and rclone (MIT, with the notices of the Go modules it is built from), separate
-programs run by the Phone tab; licences and source offers in `app/src/main/assets/licenses/`.
+programs run by the Phone tab; licences and source offers in `app/src/main/assets/licenses/`. Termux packages are
+not part of the APK: the user downloads them from Termux's repositories, under their own licences.
 
 `scripts/release.sh` signs with Android's debug key, which is fine for your own phone. To hand the app to
 others, sign it with your own release key.

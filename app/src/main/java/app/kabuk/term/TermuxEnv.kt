@@ -48,7 +48,8 @@ object TermuxEnv {
      */
     fun supported(ctx: Context) = ctx.packageName.length == 9 && arch() != null &&
         ctx.applicationInfo.targetSdkVersion <= 28 &&
-        runCatching { root(ctx).canonicalPath == ctx.filesDir.canonicalPath }.getOrDefault(false)
+        // same inode, not same canonical path: /data/user/0 and /data/data are separate mounts of the same dir
+        runCatching { java.nio.file.Files.isSameFile(root(ctx).toPath(), ctx.filesDir.toPath()) }.getOrDefault(false)
 
     /** The Phone tab's shell + environment when the Termux prefix is installed. */
     fun setup(ctx: Context, open: File): LocalTools.Setup {

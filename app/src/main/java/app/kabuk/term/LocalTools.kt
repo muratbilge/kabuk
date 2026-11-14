@@ -51,9 +51,6 @@ object LocalTools {
         val tmp = File(ctx.cacheDir, "tmp").apply { mkdirs() }
         val open = File(files, "open")
         runCatching { UrlOpener.start(open) }.onFailure { KLog.w(TAG, "URL opener not started", it) }
-        if (termux && TermuxEnv.supported(ctx) && TermuxEnv.installed(ctx)) {
-            runCatching { return TermuxEnv.setup(ctx, open) }.onFailure { KLog.w("TERMUX", "Termux shell setup failed, using busybox", it) }
-        }
         val busybox = runCatching {
             BinDir(bin, nativeDir).sync("${BuildConfig.VERSION_CODE} ${nativeDir.absolutePath} ${BinDir.LAYOUT}")
             File(bin, "busybox").takeIf { File(nativeDir, "libbusybox.so").isFile && Build.VERSION.SDK_INT >= BUSYBOX_MIN_SDK }
@@ -70,6 +67,9 @@ object LocalTools {
         )
         // with the tab's environment: rclone wants a HOME, and the test should see what the shell sees
         if (!tested) { tested = true; Thread({ selfTest(bin, nativeDir, env) }, "tools-selftest").start() }
+        if (termux && TermuxEnv.supported(ctx) && TermuxEnv.installed(ctx)) {
+            runCatching { return TermuxEnv.setup(ctx, open) }.onFailure { KLog.w("TERMUX", "Termux shell setup failed, using busybox", it) }
+        }
         return Setup(shell, env, home)
     }
 

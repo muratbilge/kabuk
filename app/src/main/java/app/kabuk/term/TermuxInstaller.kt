@@ -29,6 +29,7 @@ object TermuxInstaller {
     private var machine: InstallMachine? = null
     private var cancelFlag: AtomicBoolean? = null
     private var worker: Thread? = null
+    private var unsupportedLogged = false
 
     val running get() = _state.value.running
 
@@ -54,7 +55,14 @@ object TermuxInstaller {
 
     /** A Phone tab was opened: the consent sheet, the first time only. */
     @Synchronized fun phoneTabOpened(ctx: Context) {
-        if (!TermuxEnv.supported(ctx)) return
+        if (!TermuxEnv.supported(ctx)) {
+            if (!unsupportedLogged) {
+                unsupportedLogged = true
+                KLog.i(TAG, "not offered: unsupported here (abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}, " +
+                    "targetSdk=${ctx.applicationInfo.targetSdkVersion}, filesDir=${ctx.filesDir.path})")
+            }
+            return
+        }
         val m = machine(ctx)
         if (m.phoneTabOpened()) {
             saveOffered(ctx)
@@ -144,8 +152,9 @@ object TermuxInstaller {
 
     /** A short message for the sheet. */
     internal fun describe(e: Throwable): String = when {
-        e is UnknownHostException || e is ConnectException -> "No internet connection (github.com not reachable)"
+        e is UnknownHostException || e is ConnectException -> "No internet connection"
         e is SocketTimeoutException -> "The connection timed out"
+        e is java.net.SocketException || e is SSLException -> "The connection was lost"
         e is TermuxEnv.ChecksumException -> "The download was damaged (checksum mismatch)"
         e.message?.contains("ENOSPC") == true || e.message?.contains("No space") == true -> "Not enough free space on the phone"
         else -> e.message ?: e.javaClass.simpleName
