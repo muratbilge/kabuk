@@ -381,11 +381,22 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
         return (0 until em.mRows).map { em.screen.getSelectedText(l, it, r, it) }
     }
 
-    /** the lowest http(s) link on screen (the Phone tab's "Open link" chip); null while scrolled back */
-    fun lastScreenLink(): String? {
+    /**
+     * The Phone tab's "Open link" chip: the lowest http(s) link in the bottom rows that isn't package-manager
+     * output ([ScreenLinks.pick]); null while scrolled back.
+     */
+    fun screenLink(skipHost: (String) -> Boolean): String? {
         val em = emulator ?: return null
         if (topRow != 0) return null
-        return lastLinkIn(0, em.mRows - 1, em.mColumns) { rr -> em.screen.getSelectedText(0, rr, em.mColumns - 1, rr) to em.screen.getLineWrap(rr) }
+        return ScreenLinks.pick(em.mRows, em.mColumns, skipHost) { rr -> em.screen.getSelectedText(0, rr, em.mColumns - 1, rr) to em.screen.getLineWrap(rr) }
+    }
+
+    /** changes whenever the screen's text or the cursor changes (for "quiet for a while") */
+    fun screenSignature(): Int {
+        val em = emulator ?: return 0
+        var h = em.cursorRow * 31 + em.cursorCol
+        for (r in 0 until em.mRows) h = h * 31 + em.screen.getSelectedText(0, r, em.mColumns - 1, r).hashCode()
+        return h
     }
 
     /** the rows on screen as text, top to bottom */
@@ -778,16 +789,26 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
 // borders and herdr's scrollbar (│ ┃ ▕ ▐ ▏) never belong to a link
 private val urlRegex = Regex("""(https?://|www\.)[^\s<>"'`│┃▕▐▏]+[^\s<>"'`.,;:)\]}!?│┃▕▐▏]""")
 
-internal fun linkIn(row: Int, col: Int, l: Int, r: Int, firstRow: Int, lastRow: Int, line: (Int) -> Pair<String, Boolean>): String? {
-    val edge = charArrayOf('│', '┃', '▕', '▐', '▏')
+private val paneEdge = charArrayOf('│', '┃', '▕', '▐', '▏')
+
+/** The rows that make up [row]'s logical line: joined while a row runs on into the next (as [linkIn] joins URLs). */
+internal fun wrappedRows(row: Int, l: Int, r: Int, firstRow: Int, lastRow: Int, line: (Int) -> Pair<String, Boolean>): IntRange {
     val width = r - l + 1
-    fun text(rr: Int) = line(rr).first.trimEnd().trimEnd(*edge).trimEnd()
+    fun text(rr: Int) = line(rr).first.trimEnd().trimEnd(*paneEdge).trimEnd()
     // a row the URL runs out of: soft-wrapped, or filled up to (almost) the pane's edge with no space at the end
     fun continues(rr: Int) = line(rr).second || text(rr).let { it.length >= width - 2 && it.isNotEmpty() && !it.last().isWhitespace() }
     var start = row
     while (start > firstRow && row - start < 12 && continues(start - 1)) start--
     var end = row
     while (end < lastRow && end - row < 12 && continues(end)) end++
+    return start..end
+}
+
+internal fun linkIn(row: Int, col: Int, l: Int, r: Int, firstRow: Int, lastRow: Int, line: (Int) -> Pair<String, Boolean>): String? {
+    fun text(rr: Int) = line(rr).first.trimEnd().trimEnd(*paneEdge).trimEnd()
+    val rows = wrappedRows(row, l, r, firstRow, lastRow, line)
+    val start = rows.first
+    val end = rows.last
     val sb = StringBuilder()
     var offset = -1
     for (rr in start..end) {

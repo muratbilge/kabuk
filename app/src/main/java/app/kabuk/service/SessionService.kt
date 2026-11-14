@@ -35,6 +35,8 @@ class SessionService : Service() {
         when (intent?.action) {
             ACTION_EXIT -> { TabManager.closeAll(); return START_NOT_STICKY }
             ACTION_WAKE -> toggleWakeLock()
+            ACTION_WAKE_ON -> if (wakeLock?.isHeld != true) toggleWakeLock()
+            ACTION_WAKE_OFF -> if (wakeLock?.isHeld == true) toggleWakeLock()
         }
         val n = build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -64,7 +66,7 @@ class SessionService : Service() {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (n == 0 && app.kabuk.term.TermuxInstaller.running) "Installing Termux packages"
                 else "$n session${if (n == 1) "" else "s"} open")
-            .setContentText(summary() + if (locked) " · wake lock on" else "")
+            .setContentText(summary() + if (locked) " · wake lock on (CPU stays awake)" else "")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, if (locked) "Release wake lock" else "Acquire wake lock", action(ACTION_WAKE, 1)).build())
@@ -96,6 +98,8 @@ class SessionService : Service() {
         private const val ID = 1
         const val ACTION_EXIT = "app.kabuk.EXIT"
         const val ACTION_WAKE = "app.kabuk.WAKE"
+        const val ACTION_WAKE_ON = "app.kabuk.WAKE_ON"
+        const val ACTION_WAKE_OFF = "app.kabuk.WAKE_OFF"
         private var instance: SessionService? = null
 
         @Volatile private var lastShown = ""
@@ -107,6 +111,24 @@ class SessionService : Service() {
                 setShowBadge(false)
             }
         )
+
+        /**
+         * `termux-wake-lock` / `termux-wake-unlock` (term/KabukCommands.kt): takes or releases the partial wake lock
+         * (+ Wi-Fi lock) the notification's button toggles. The service runs while a Phone tab is open; the intent
+         * starts it otherwise.
+         */
+        fun setWakeLock(ctx: android.content.Context, on: Boolean) {
+            val s = instance
+            if (s != null) {
+                if ((s.wakeLock?.isHeld == true) != on) s.toggleWakeLock()
+                refresh()
+                return
+            }
+            val i = Intent(ctx, SessionService::class.java).setAction(if (on) ACTION_WAKE_ON else ACTION_WAKE_OFF)
+            if (on) runCatching { if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i) }
+        }
+
+        val wakeLockHeld get() = instance?.wakeLock?.isHeld == true
 
         /** re-posts the notification, but only when its text changed (agents are polled every 3 s) */
         fun refresh() {

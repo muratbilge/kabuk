@@ -191,15 +191,22 @@ fun TerminalScreen(
         }
     }
 
-    // Phone tab: a program printed a URL (and didn't open it itself through xdg-open): offer to open it
+    // Phone tab: a program printed a URL (and didn't open it itself through xdg-open) and waits: offer to open it.
+    // Not for package-manager output (mirror URLs), and only once the screen is quiet (term/ScreenLinks.kt).
     LaunchedEffect(tab) {
         ui.screenLink = null
-        while (tab is LocalTab) {
+        if (tab !is LocalTab) return@LaunchedEffect
+        val mirrors = if (tab.termux) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { app.kabuk.term.ScreenLinks.mirrorHosts(app.kabuk.term.TermuxEnv.prefix(TabManager.app)) }.getOrDefault(emptySet())
+        } else emptySet()
+        val gate = app.kabuk.term.ScreenLinks.ChipGate()
+        while (true) {
             if (TabManager.foreground) {
-                val u = ui.view.lastScreenLink()
-                ui.screenLink = u?.takeIf { it !in ui.doneLinks && !app.kabuk.term.UrlOpener.wasHandled(it) }
+                val u = ui.view.screenLink { it in mirrors }
+                    ?.takeIf { it !in ui.doneLinks && !app.kabuk.term.UrlOpener.wasHandled(it) }
+                ui.screenLink = gate.update(android.os.SystemClock.uptimeMillis(), ui.view.screenSignature(), u)
             }
-            delay(700)
+            delay(500)
         }
     }
 
@@ -354,7 +361,7 @@ private fun TabStrip(
 
 /**
  * Phone tab menus: "Install Termux packages…" until they are installed, the progress while installing, and
- * "Restart shell" for a busybox tab once they are.
+ * "Restart shell" for a busybox tab plus "Repair Termux packages…" once they are.
  */
 @Composable
 private fun TermuxMenuItem(t: LocalTab, close: () -> Unit) {
@@ -367,8 +374,12 @@ private fun TermuxMenuItem(t: LocalTab, close: () -> Unit) {
             onClick = { close(); inst.hidden.value = false })
         !inst.installed(ctx) -> DropdownMenuItem(text = { Text("Install Termux packages…") },
             onClick = { close(); inst.menu(ctx) })
-        !t.termux && !t.busybox -> DropdownMenuItem(text = { Text("Restart shell (Termux)") },
-            onClick = { close(); TabManager.close(t); TabManager.openLocal() })
+        else -> {
+            if (!t.termux && !t.busybox) DropdownMenuItem(text = { Text("Restart shell (Termux)") },
+                onClick = { close(); TabManager.close(t); TabManager.openLocal() })
+            DropdownMenuItem(text = { Text("Repair Termux packages…") },
+                onClick = { close(); inst.confirmRepair.value = true })
+        }
     }
 }
 

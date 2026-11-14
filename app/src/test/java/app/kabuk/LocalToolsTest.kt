@@ -37,9 +37,10 @@ class LocalToolsTest {
         val bin = File(tmp.root, "bin")
         // a busybox that (hypothetically) had applets with these names must not take them
         BinDir(bin, lib) { listOf("ls", "rclone", "xdg-open", "open", "termux-open-url", "kabuk-open") }.sync("34 /x")
-        assertEquals(setOf(".stamp", "busybox", "ls", "rclone", "kabuk-open", "xdg-open", "open", "termux-open-url"), bin.list()!!.toSet())
+        val opener = listOf("kabuk-open", "xdg-open", "open", "termux-open-url", "termux-open", "termux-wake-lock", "termux-wake-unlock")
+        assertEquals(setOf(".stamp", "busybox", "ls", "rclone") + opener, bin.list()!!.toSet())
         assertEquals(File(lib, "librclone.so").path, target(File(bin, "rclone")))
-        listOf("kabuk-open", "xdg-open", "open", "termux-open-url").forEach { assertEquals(File(lib, "libkabuk-open.so").path, target(File(bin, it))) }
+        opener.forEach { assertEquals(File(lib, "libkabuk-open.so").path, target(File(bin, it))) }
     }
 
     @Test fun urlOpenerNamesStayFreeWithoutTheHelper() {

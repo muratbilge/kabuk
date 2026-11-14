@@ -331,10 +331,15 @@ private fun PhoneShellRow(onConnected: () -> Unit) {
             }
         }
         androidx.compose.material3.DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            if (installed) androidx.compose.material3.DropdownMenuItem(
-                text = { Text("Phone (busybox)") },
-                onClick = { menu = false; TabManager.openLocal(busybox = true); onConnected() },
-            )
+            if (installed && !state.running) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Phone (busybox)") },
+                    onClick = { menu = false; TabManager.openLocal(busybox = true); onConnected() },
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Repair Termux packages…") }, onClick = { menu = false; inst.confirmRepair.value = true },
+                )
+            }
             else if (state.running) androidx.compose.material3.DropdownMenuItem(
                 text = { Text("Installing Termux packages…") }, onClick = { menu = false; inst.hidden.value = false },
             )

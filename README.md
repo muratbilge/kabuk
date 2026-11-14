@@ -141,8 +141,18 @@ Termux's collection, with bash as the shell.
 - How it works: Termux's packages are built for `/data/data/com.termux`; Kabuk downloads Termux's bootstrap (pinned
   version, SHA-256 checked) and rewrites that path to `/data/data/app.kabuk` while unpacking, and an apt hook does
   the same to every package before it is installed. That is why Kabuk targets SDK 28 (like Termux).
-- 64-bit phones only (arm64; x86_64 for the emulator). Termux:API-style commands that talk to the Termux app
-  (`termux-open`, `termux-wake-lock`, `am`) don't work yet; `xdg-open`/`termux-open-url` do.
+- 64-bit phones only (arm64; x86_64 for the emulator).
+- **Termux app commands** (0.8.2): `termux-wake-lock` / `termux-wake-unlock` (Kabuk holds a partial wake lock, the
+  notification says "wake lock on"), `termux-open <file|url>` and `xdg-open <file>` (files go to other apps as a
+  content:// URI; `--send`, `--chooser`, `--content-type`), `am start|broadcast` (a common subset: `-a -d -t -c -n
+  -f --es --ez --ei --el --ef --eu --esa`; anything else says "not supported in Kabuk"), `termux-reload-settings`
+  (`~/.termux/termux.properties`: `terminal-transcript-rows`, `bell-character`, `volume-keys`; extra-keys and the
+  rest are listed as ignored), `termux-info` (Kabuk's details). No Termux:API.
+- `dpkg -i x.deb` by hand relocates the package like apt does (a copy; your .deb stays as it was).
+- **Repair**: "Repair Termux packages…" (Phone tab menu, Servers screen ⋮) downloads the base packages again and
+  replaces everything under `usr` after a confirmation; installed packages are removed, the home folder stays.
+- The "Open link" chip ignores package-manager output (mirror URLs during `pkg update`) and waits until the screen
+  has been quiet for 1.5 s with the link in the bottom rows.
 - Packages are downloaded by you, from Termux's repositories; Kabuk doesn't ship them. Details:
   `docs/LOCAL-TOOLS.md`, "Phase B".
 
@@ -211,6 +221,12 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.8.2 — Termux hardening and app commands.** Fixes a data-loss bug of 0.8.1: running `termux-setup-storage`
+  a second time emptied shared storage (the old `~/storage` links were removed with a delete that followed the
+  `shared` link into /sdcard); every delete of Termux's dirs now unlinks symlinks without following them. New:
+  `termux-wake-lock`/`-unlock`, `termux-open`, `am` (subset), `termux-reload-settings`, `termux-info`, `dpkg -i`
+  with relocation, "Repair Termux packages…", leftover staging dirs removed at app start, and no "Open link" chip
+  for `pkg`/apt mirror URLs.
 - **0.8.1 — Termux packages.** The Phone tab can install Termux's official packages (`pkg install python git …`)
   after asking once (~33 MB download, ~100 MB on the phone): Termux's bootstrap is downloaded, SHA-256 checked and
   relocated to Kabuk's data dir while unpacking, with progress, Cancel and Retry (a broken download resumes); an

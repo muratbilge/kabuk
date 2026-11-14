@@ -15,5 +15,6 @@ class KabukApp : Application() {
         Security.insertProviderAt(BouncyCastleProvider(), 1)
         Settings.init(this)
         TabManager.init(this)
+        app.kabuk.term.TermuxInstaller.removeStale(this)
     }
 }

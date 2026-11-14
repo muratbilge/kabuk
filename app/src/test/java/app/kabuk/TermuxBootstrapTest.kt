@@ -146,6 +146,49 @@ class TermuxBootstrapTest {
         assertTrue(File(x, "DEBIAN/postinst").canExecute())
     }
 
+    /** `dpkg -i x.deb` by hand: the wrapper relocates a copy with the real hook, then runs the (here: fake) dpkg. */
+    @Test fun dpkgWrapperRelocatesDebsGivenByHand() {
+        assumeTrue(File("/usr/bin/dpkg-deb").canExecute() && File("/bin/sh").canExecute())
+        val files = tmp.newFolder("files")
+        val usr = File(files, "usr")
+        File(usr, "bin").mkdirs(); File(usr, "tmp").mkdirs(); File(usr, "libexec/kabuk").mkdirs()
+        // the scripts' shebangs point at usr/bin/sh: the host's sh stands in
+        Files.createSymbolicLink(File(usr, "bin/sh").toPath(), File("/bin/sh").toPath())
+        File(usr, "libexec/kabuk/relocate-debs").apply { writeText(TermuxEnv.relocateDebsScript(usr.path)); setExecutable(true, true) }
+        val log = File(tmp.root, "dpkg.log")
+        File(usr, "bin/dpkg").apply {
+            writeText("#!/bin/sh\necho \"args: $*\" >> ${log.path}\nfor a; do case \"${'$'}a\" in *.deb) dpkg-deb -c \"${'$'}a\" >> ${log.path};; esac; done\nexit 7\n")
+            setExecutable(true, true)
+        }
+        val root = tmp.newFolder("pkg")
+        File(root, "data/data/com.termux/files/usr/bin").mkdirs()
+        File(root, "data/data/com.termux/files/usr/bin/hello").writeText("#!/data/data/com.termux/files/usr/bin/sh\necho hi\n")
+        File(root, "DEBIAN").mkdirs()
+        File(root, "DEBIAN/control").writeText("Package: hello\nVersion: 1\nArchitecture: all\nMaintainer: x\nDescription: t\n")
+        val deb = File(tmp.root, "hello_1_all.deb")
+        assertEquals(0, sh(listOf("dpkg-deb", "--root-owner-group", "--nocheck", "-b", root.path, deb.path)))
+        val before = deb.readBytes()
+        val wrapper = File(tmp.root, "dpkg-wrapper").apply { writeText(TermuxEnv.dpkgWrapper(files.path)) }
+        val p = ProcessBuilder("/bin/sh", wrapper.path, "-i", deb.path).redirectErrorStream(true)
+        p.environment()["TMPDIR"] = usr.path + "/tmp"
+        val proc = p.start()
+        val out = proc.inputStream.bufferedReader().readText()
+        assertTrue(proc.waitFor(60, TimeUnit.SECONDS))
+        assertEquals("the real dpkg's exit code: $out", 7, proc.exitValue())
+        assertTrue(out, out.contains("kabuk: relocated 1-hello_1_all.deb"))
+        val l = log.readText()
+        assertTrue(l, l.contains("./data/data/app.kabuk/files/usr/bin/hello"))
+        assertFalse(l, l.contains("com.termux"))
+        assertTrue("the user's .deb stays as it was", before.contentEquals(deb.readBytes()))
+        assertEquals("temp dir removed", 0, File(usr, "tmp").list()!!.size)
+        // anything but an install goes straight through
+        log.delete()
+        val q = ProcessBuilder("/bin/sh", wrapper.path, "--compare-versions", "1", "lt", "2").redirectErrorStream(true).start()
+        q.inputStream.readBytes()
+        assertTrue(q.waitFor(30, TimeUnit.SECONDS))
+        assertEquals("args: --compare-versions 1 lt 2\n", log.readText())
+    }
+
     private fun sh(cmd: List<String>): Int {
         val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
         p.inputStream.readBytes()

@@ -24,6 +24,8 @@ class InstallMachine(offered: Boolean, installed: Boolean) {
     var offered = offered; private set
     var installed = installed; private set
     var state: InstallState = InstallState.Idle; private set
+    /** the running (or last finished) install is a repair of an installed prefix */
+    var repairing = false; private set
 
     /** A Phone tab was opened: the first time ever (not installed) the consent sheet comes. True when it did. */
     fun phoneTabOpened(): Boolean {
@@ -47,6 +49,19 @@ class InstallMachine(offered: Boolean, installed: Boolean) {
     /** Install (from the sheet) or Retry (after a failure). True when the installer should start. */
     fun install(): Boolean {
         if (state != InstallState.Offer && state !is InstallState.Failed) return false
+        if (state == InstallState.Offer) repairing = false
+        state = InstallState.Downloading(0, -1)
+        return true
+    }
+
+    /**
+     * "Repair Termux packages…", after the user confirmed: a fresh bootstrap over a new staging dir that replaces
+     * the prefix (home stays). True when the installer should start; no-op while installing.
+     */
+    fun repair(): Boolean {
+        if (state.running) return false
+        offered = true
+        repairing = true
         state = InstallState.Downloading(0, -1)
         return true
     }

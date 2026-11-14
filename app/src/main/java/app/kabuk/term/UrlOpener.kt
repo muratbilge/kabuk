@@ -31,6 +31,8 @@ object UrlOpener {
             override fun onEvent(event: Int, path: String?) {
                 // termux-setup-storage (files/kabuk/bin) asks for storage access
                 if (path == "storage.req") { File(dir, path).delete(); TabManager.main.post { StorageAccess.request(TabManager.app) }; return }
+                // am, termux-open, termux-wake-lock, … (kabuk-open under those names): answered through a .res file
+                if (path != null && path.endsWith(".req")) { KabukCommands.handle(dir, File(dir, path)); return }
                 if (path == null || !path.endsWith(".url")) return
                 handle(File(dir, path)) { url -> TabManager.main.post { open(url, fromProgram = true) } }
             }

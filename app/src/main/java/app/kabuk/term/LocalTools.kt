@@ -19,7 +19,9 @@ object LocalTools {
     /** Programs Kabuk ships, in jniLibs as lib<name>.so; a later one keeps its name over a busybox applet. */
     val TOOLS = listOf("busybox", "rclone", "kabuk-open")
     /** More names for a tool (name -> tool); never taken by a busybox applet. kabuk-open hands URLs to [UrlOpener]. */
-    val ALIASES = mapOf("xdg-open" to "kabuk-open", "open" to "kabuk-open", "termux-open-url" to "kabuk-open")
+    val ALIASES = mapOf("xdg-open" to "kabuk-open", "open" to "kabuk-open", "termux-open-url" to "kabuk-open",
+        // Termux app commands (term/KabukCommands.kt); not `am`, /system/bin/am stays reachable in busybox's shell
+        "termux-open" to "kabuk-open", "termux-wake-lock" to "kabuk-open", "termux-wake-unlock" to "kabuk-open")
     /**
      * busybox applets never linked because Android's own /system/bin version works for an app and busybox's does not:
      * busybox ping/traceroute want a raw socket (root), /system/bin/ping uses ICMP "ping sockets" and netd's DNS.
@@ -145,8 +147,8 @@ internal class BinDir(
     },
 ) {
     companion object {
-        /** Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out). */
-        const val LAYOUT = 2
+        /** Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out, 3: termux-* names). */
+        const val LAYOUT = 3
     }
 
     private val stampFile get() = File(bin, ".stamp")
@@ -155,7 +157,7 @@ internal class BinDir(
     fun sync(stamp: String): Boolean {
         if (bin.isDirectory && runCatching { stampFile.readText() }.getOrNull() == stamp) return false
         val fresh = File(bin.parentFile, "${bin.name}.new")
-        fresh.deleteRecursively(); fresh.mkdirs()
+        SafeDelete.tree(fresh); fresh.mkdirs()
         val present = tools.filter { File(nativeDir, "lib$it.so").isFile }
         present.forEach { link(fresh, it, it) }
         aliases.filter { (name, tool) -> tool in present && name !in tools }.forEach { (name, tool) -> link(fresh, name, tool) }
@@ -166,7 +168,7 @@ internal class BinDir(
                 .forEach { link(fresh, it, "busybox") }
         }
         File(fresh, ".stamp").writeText(stamp)
-        bin.deleteRecursively()
+        SafeDelete.tree(bin)
         if (!fresh.renameTo(bin)) error("cannot move $fresh to $bin")
         return true
     }

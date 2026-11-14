@@ -33,7 +33,8 @@ object StorageAccess {
     fun link(ctx: Context) {
         val home = File(TermuxEnv.root(ctx), "home")
         val dir = File(home, "storage")
-        dir.deleteRecursively() // only links live here; deleteRecursively doesn't follow them
+        // only links live here: never follow them (Kotlin's deleteRecursively would empty /sdcard through `shared`)
+        SafeDelete.tree(dir)
         dir.mkdirs()
         @Suppress("DEPRECATION") val shared = Environment.getExternalStorageDirectory()
         val links = mapOf("shared" to shared, "downloads" to File(shared, "Download"), "dcim" to File(shared, "DCIM"),

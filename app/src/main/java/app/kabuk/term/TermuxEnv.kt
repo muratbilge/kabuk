@@ -38,6 +38,10 @@ object TermuxEnv {
     fun root(ctx: Context) = File("/data/data/${ctx.packageName}/files")
     fun prefix(ctx: Context) = File(root(ctx), "usr")
     fun staging(ctx: Context) = File(root(ctx), "usr-staging")
+    /** the previous prefix during the swap at the end of an install/repair */
+    fun old(ctx: Context) = File(root(ctx), "usr-old")
+    /** leftovers of an install the process didn't finish (killed): removed at app start */
+    fun stale(ctx: Context) = staging(ctx).exists() || old(ctx).exists()
     fun installed(ctx: Context) = File(prefix(ctx), "bin/login").isFile
     fun zipFile(ctx: Context, arch: String) = File(File(ctx.cacheDir, "termux"), "bootstrap-$arch.zip")
 
@@ -70,13 +74,25 @@ object TermuxEnv {
             "TERMUX__PREFIX=${prefix.path}", "TERMUX__HOME=${home.path}",
             "TERMUX_MAIN_PACKAGE_FORMAT=debian", "TERMUX_APP_PACKAGE_MANAGER=apt",
             "KABUK_OPEN_DIR=${open.path}", "BROWSER=xdg-open",
+            "KABUK_VERSION=${app.kabuk.BuildConfig.VERSION_NAME} (${app.kabuk.BuildConfig.VERSION_CODE})",
         )
         return LocalTools.Setup(File(prefix, "bin/login").path, env.toTypedArray(), home, arrayOf("-login"), termux = true)
     }
 
     /**
+     * Names of libkabuk-open.so in `files/kabuk/bin` (scripts/tools/kabuk-open.c): URLs go to [UrlOpener], the rest
+     * are requests [KabukCommands] answers. They shadow termux-tools' scripts of the same names, which talk to the
+     * Termux app (`am broadcast … com.termux/…`).
+     */
+    val OPENER_NAMES = listOf(
+        "xdg-open", "termux-open-url", "kabuk-open", "termux-open", "am", "termux-am",
+        "termux-wake-lock", "termux-wake-unlock", "termux-reload-settings",
+    )
+
+    /**
      * `files/kabuk/bin`, first on PATH: Kabuk's replacements for termux-tools commands that talk to the Termux app
-     * (`termux-setup-storage`, `termux-open-url`, `xdg-open`). Not owned by a package, so upgrades don't touch it.
+     * ([OPENER_NAMES], `termux-setup-storage`, `termux-info`) and the `dpkg` wrapper that relocates .debs installed by
+     * hand. Not owned by a package, so upgrades don't touch it; rewritten at every tab start.
      */
     private fun writeKabukBin(ctx: Context, root: File): File {
         val dir = File(root, "kabuk/bin").apply { mkdirs() }
@@ -91,8 +107,10 @@ object TermuxEnv {
             )
             setExecutable(true, true)
         }
+        File(dir, "termux-info").apply { writeText(TERMUX_INFO.replace("@ROOT@", root.path)); setExecutable(true, true) }
+        File(dir, "dpkg").apply { writeText(DPKG_WRAPPER.replace("@ROOT@", root.path)); setExecutable(true, true) }
         val opener = File(ctx.applicationInfo.nativeLibraryDir, "libkabuk-open.so")
-        for (name in listOf("xdg-open", "termux-open-url", "kabuk-open")) {
+        for (name in OPENER_NAMES) {
             // nativeLibraryDir moves on every app update: always re-link
             val l = File(dir, name)
             l.delete()
@@ -135,7 +153,7 @@ object TermuxEnv {
         if (cancelled()) throw Bootstrap.Cancelled()
         val t1 = System.currentTimeMillis()
         val staging = staging(ctx)
-        staging.deleteRecursively()
+        SafeDelete.tree(staging)
         staging.mkdirs()
         val stats = Bootstrap.extract(zip, staging, fs, onExtract, cancelled)
         val sums = Bootstrap.fixDpkgChecksums(staging)
@@ -144,8 +162,15 @@ object TermuxEnv {
         writeMirrorChoice(staging, fs)
         writeFirstUpdate(staging, prefix)
         if (cancelled()) throw Bootstrap.Cancelled()
-        prefix.deleteRecursively()
-        if (!staging.renameTo(prefix)) throw IOException("cannot move the staging dir into place")
+        // swap by renames (a repair replaces a working prefix: never leave none behind), then drop the old one
+        val old = old(ctx)
+        SafeDelete.tree(old)
+        if (prefix.exists() && !prefix.renameTo(old)) throw IOException("cannot move the old prefix away")
+        if (!staging.renameTo(prefix)) {
+            old.renameTo(prefix)
+            throw IOException("cannot move the staging dir into place")
+        }
+        SafeDelete.tree(old)
         zip.delete() // 33 MB: only needed again for a reinstall
         return Report(downloaded, downloadMs, stats, sums, System.currentTimeMillis() - t1)
     }
@@ -154,8 +179,9 @@ object TermuxEnv {
 
     /** Removes everything a failed or cancelled install left (staging dir; with [download] also the partial zip). */
     fun cleanup(ctx: Context, download: Boolean) {
-        staging(ctx).deleteRecursively()
-        if (download) File(ctx.cacheDir, "termux").deleteRecursively()
+        SafeDelete.tree(staging(ctx))
+        SafeDelete.tree(old(ctx))
+        if (download) SafeDelete.tree(File(ctx.cacheDir, "termux"))
     }
 
     /** apt's Pre-Install-Pkgs hook: every .deb is relocated before dpkg sees it (usr/libexec/kabuk/relocate-debs). */
@@ -311,6 +337,80 @@ object TermuxEnv {
         |  echo "kabuk: relocated ${'$'}{deb##*/}"
         |done
         |""".trimMargin()
+
+    /** `termux-info` for Kabuk: Termux's asks the Termux app for its details; this prints Kabuk's. */
+    private val TERMUX_INFO = """
+        |#!@ROOT@/usr/bin/sh
+        |# Kabuk: termux-info (Termux's own asks the Termux app, which Kabuk replaces)
+        |P=@ROOT@/usr
+        |echo "Kabuk ${'$'}{KABUK_VERSION:-?}: Termux packages relocated to ${'$'}P"
+        |echo "Packages CPU architecture:"
+        |dpkg --print-architecture 2>/dev/null
+        |echo "Subscribed repositories:"
+        |grep -hE '^[[:space:]]*deb[[:space:]]' "${'$'}P/etc/apt/sources.list" "${'$'}P"/etc/apt/sources.list.d/*.list 2>/dev/null
+        |echo "Chosen mirror group: ${'$'}(readlink "${'$'}P/etc/termux/chosen_mirrors" 2>/dev/null || echo none)"
+        |echo "Updatable packages:"
+        |apt list --upgradable 2>/dev/null | tail -n +2
+        |echo "termux-tools version:"
+        |dpkg-query -W -f '${'$'}{Version}
+' termux-tools 2>/dev/null
+        |echo "Installed packages: ${'$'}(dpkg-query -W -f '.
+' 2>/dev/null | wc -l)"
+        |echo "Android version:"
+        |/system/bin/getprop ro.build.version.release
+        |echo "Kernel build information:"
+        |uname -a
+        |echo "Device manufacturer:"
+        |/system/bin/getprop ro.product.manufacturer
+        |echo "Device model:"
+        |/system/bin/getprop ro.product.model
+        |echo "Supported ABIs:"
+        |/system/bin/getprop ro.product.cpu.abilist
+        |echo "LD_PRELOAD: ${'$'}{LD_PRELOAD:-}"
+        |echo "Termux app commands in Kabuk: am (subset), termux-open, termux-open-url, termux-wake-lock,"
+        |echo "  termux-wake-unlock, termux-reload-settings, termux-setup-storage. No Termux:API or plugins."
+        |""".trimMargin()
+
+    /**
+     * `dpkg` in files/kabuk/bin: `dpkg -i/--install/--unpack x.deb` by hand gets the same relocation as apt's hook
+     * (relocate-debs on a copy, the user's .deb stays as it is), then runs the real dpkg. apt calls usr/bin/dpkg by
+     * its full path and has the hook anyway; relocate-debs skips .debs that are already relocated.
+     */
+    private val DPKG_WRAPPER = """
+        |#!@ROOT@/usr/bin/sh
+        |# Kabuk: relocates .debs installed by hand (built for /data/data/com.termux), then runs the real dpkg.
+        |real=@ROOT@/usr/bin/dpkg
+        |hook=@ROOT@/usr/libexec/kabuk/relocate-debs
+        |install=0
+        |for a in "${'$'}@"; do
+        |  case "${'$'}a" in
+        |    --install|--unpack|-i|-[!-]*i*) install=1 ;;
+        |    -R|--recursive|-[!-]*R*) echo "kabuk: dpkg -R does not relocate; install the .debs by name or with apt install ./x.deb" >&2 ;;
+        |  esac
+        |done
+        |if [ "${'$'}install" = 0 ] || [ ! -x "${'$'}hook" ]; then exec "${'$'}real" "${'$'}@"; fi
+        |w=${'$'}(mktemp -d "${'$'}{TMPDIR:-@ROOT@/usr/tmp}/kabuk-dpkg.XXXXXX") || exit 1
+        |trap 'rm -rf "${'$'}w"' EXIT
+        |n=${'$'}#; i=0
+        |for a in "${'$'}@"; do
+        |  case "${'$'}a" in
+        |    *.deb) if [ -f "${'$'}a" ]; then
+        |        c="${'$'}w/${'$'}i-${'$'}{a##*/}"
+        |        cp "${'$'}a" "${'$'}c" || exit 1
+        |        printf '%s
+' "${'$'}c" >> "${'$'}w/list"
+        |        a=${'$'}c
+        |      fi ;;
+        |  esac
+        |  set -- "${'$'}@" "${'$'}a"; i=${'$'}((i + 1))
+        |done
+        |shift "${'$'}n"
+        |if [ -s "${'$'}w/list" ]; then "${'$'}hook" < "${'$'}w/list" || { echo "kabuk: relocating the .deb failed" >&2; exit 1; }; fi
+        |"${'$'}real" "${'$'}@"
+        |""".trimMargin()
+
+    /** For tests: the dpkg wrapper as written for [root] (files dir). */
+    internal fun dpkgWrapper(root: String) = DPKG_WRAPPER.replace("@ROOT@", root)
 
     /** For tests: the hook script as written for [prefix]. */
     internal fun relocateDebsScript(prefix: String) = RELOCATE_DEBS.replace("@PREFIX@", prefix)

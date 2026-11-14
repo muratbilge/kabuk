@@ -39,7 +39,10 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
     val fraction by TermuxInstaller.fraction.collectAsState()
     val hidden by TermuxInstaller.hidden.collectAsState()
     val ctx = LocalContext.current
+    val confirmRepair by TermuxInstaller.confirmRepair.collectAsState()
+    if (confirmRepair) RepairDialog()
     if (state == InstallState.Idle || (state.running && hidden)) return
+    val repair = TermuxInstaller.repairing
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = {
@@ -69,7 +72,7 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
                     }
                 }
                 is InstallState.Downloading, InstallState.Verifying, is InstallState.Extracting -> {
-                    Title("Installing Termux packages")
+                    Title(if (repair) "Repairing Termux packages" else "Installing Termux packages")
                     val f = fraction
                     if (f == null) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp), color = Accent)
                     else LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), color = Accent)
@@ -80,22 +83,27 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
                     }
                 }
                 is InstallState.Failed -> {
-                    Title("Couldn't install Termux packages")
+                    Title(if (repair) "Couldn't repair Termux packages" else "Couldn't install Termux packages")
                     Body(s.message)
-                    Body("The Phone tab keeps its busybox shell.", muted = true)
+                    Body(if (repair) "Your Termux packages are as they were." else "The Phone tab keeps its busybox shell.", muted = true)
                     Buttons {
                         TextButton(onClick = { TermuxInstaller.dismiss() }) { Text("Close") }
                         Primary("Retry") { TermuxInstaller.install(ctx) }
                     }
                 }
                 InstallState.Done -> {
-                    val open = TabManager.tabs.value.filterIsInstance<LocalTab>().filter { !it.termux && !it.busybox }
-                    Title("Termux packages installed")
+                    // after a repair the open Termux shells still run the old (deleted) files: restart them too
+                    val open = TabManager.tabs.value.filterIsInstance<LocalTab>().filter { !it.busybox && (repair || !it.termux) }
+                    Title(if (repair) "Termux packages repaired" else "Termux packages installed")
                     Body(
-                        "New Phone tabs start bash. The first one fetches the package lists (pkg update); then " +
-                            "try: pkg install python"
+                        (if (repair) "A fresh set of base packages is in place; your home folder is unchanged. "
+                            else "New Phone tabs start bash. ") +
+                            "The first new tab fetches the package lists (pkg update); then try: pkg install python"
                     )
-                    if (open.isNotEmpty()) Body("Your open Phone tab still runs busybox.", muted = true)
+                    if (open.isNotEmpty()) Body(
+                        if (repair) "Open Phone tabs still run the old programs." else "Your open Phone tab still runs busybox.",
+                        muted = true,
+                    )
                     Buttons {
                         TextButton(onClick = { TermuxInstaller.dismiss() }) { Text("Close") }
                         Primary(if (open.isNotEmpty()) "Restart shell" else "Open Phone tab") {
@@ -110,6 +118,27 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
             }
         }
     }
+}
+
+/** "Repair Termux packages…": confirm first, it replaces everything under usr (installed packages go). */
+@Composable
+private fun RepairDialog() {
+    val ctx = LocalContext.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { TermuxInstaller.confirmRepair.value = false },
+        containerColor = Surface1,
+        title = { Text("Repair Termux packages?") },
+        text = {
+            Text(
+                "Downloads the base packages again (~${TermuxEnv.DOWNLOAD_MB} MB) and replaces everything Termux " +
+                    "installed: installed packages are removed, your home folder stays."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { TermuxInstaller.confirmRepair.value = false; TermuxInstaller.repair(ctx) }) { Text("Repair") }
+        },
+        dismissButton = { TextButton(onClick = { TermuxInstaller.confirmRepair.value = false }) { Text("Cancel") } },
+    )
 }
 
 internal fun progressText(s: InstallState): String = when (s) {

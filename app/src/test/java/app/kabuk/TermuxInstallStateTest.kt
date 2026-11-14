@@ -86,4 +86,21 @@ class TermuxInstallStateTest {
         m.phoneTabOpened(); m.notNow()
         assertFalse(m.install())
     }
+
+    @Test fun repairRunsOverAnInstalledPrefix() {
+        val m = InstallMachine(offered = true, installed = true)
+        assertTrue(m.repair())
+        assertTrue(m.repairing)
+        assertEquals(InstallState.Downloading(0, -1), m.state)
+        assertFalse("not twice while running", m.repair())
+        m.failed("No internet connection")
+        assertTrue("retry stays a repair", m.install())
+        assertTrue(m.repairing)
+        m.verifying(); m.extracted(1, 1); m.finished()
+        assertEquals(InstallState.Done, m.state)
+        m.dismiss()
+        assertTrue(m.menu())
+        assertTrue(m.install())
+        assertFalse("an install from the sheet is no repair", m.repairing)
+    }
 }

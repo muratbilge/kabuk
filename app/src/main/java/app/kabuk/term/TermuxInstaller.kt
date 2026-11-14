@@ -26,6 +26,8 @@ object TermuxInstaller {
     val fraction = MutableStateFlow<Float?>(null)
     /** the user hid the progress sheet; the result still comes as a sheet */
     val hidden = MutableStateFlow(false)
+    /** "Repair Termux packages…" was chosen: the confirmation dialog (ui/TermuxUi.kt) is up */
+    val confirmRepair = MutableStateFlow(false)
     private var machine: InstallMachine? = null
     private var cancelFlag: AtomicBoolean? = null
     private var worker: Thread? = null
@@ -35,11 +37,22 @@ object TermuxInstaller {
 
     @Synchronized private fun machine(ctx: Context): InstallMachine = machine ?: run {
         val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        InstallMachine(p.getBoolean("offered", false), TermuxEnv.installed(ctx)).also {
-            machine = it
-            // a process killed mid-install leaves the staging dir behind
-            if (TermuxEnv.staging(ctx).exists()) Thread({ TermuxEnv.cleanup(ctx, download = false) }, "termux-cleanup").start()
-        }
+        InstallMachine(p.getBoolean("offered", false), TermuxEnv.installed(ctx)).also { machine = it }
+    }
+
+    /**
+     * App start: a process killed mid-install (or mid-repair) leaves `usr-staging` / `usr-old` behind; nothing can
+     * be installing yet in a fresh process, so they go (in the background, without following symlinks).
+     */
+    @Synchronized fun removeStale(ctx: Context) {
+        if (!TermuxEnv.stale(ctx)) return
+        val app = ctx.applicationContext
+        // as the worker: an install started meanwhile joins it first
+        worker = Thread({
+            val t0 = System.currentTimeMillis()
+            TermuxEnv.cleanup(app, download = false)
+            KLog.i(TAG, "removed a stale staging dir from an unfinished install (${System.currentTimeMillis() - t0} ms)")
+        }, "termux-cleanup").also { it.start() }
     }
 
     private fun publish(m: InstallMachine) {
@@ -91,9 +104,24 @@ object TermuxInstaller {
         val m = machine(ctx)
         val retry = m.state is InstallState.Failed
         if (!m.install()) return
+        start(ctx, m, if (retry) "retry" else "install")
+    }
+
+    /** "Repair Termux packages…" after the confirmation: reinstalls the bootstrap, keeps the home folder. */
+    @Synchronized fun repair(ctx: Context) {
+        if (!TermuxEnv.supported(ctx)) return
+        val m = machine(ctx)
+        if (!m.repair()) return
+        saveOffered(ctx)
+        start(ctx, m, "repair")
+    }
+
+    val repairing get() = machine?.repairing == true
+
+    private fun start(ctx: Context, m: InstallMachine, what: String) {
         hidden.value = false
         publish(m)
-        KLog.i(TAG, "${if (retry) "retry" else "install"}: ${TermuxEnv.BOOTSTRAP_TAG} (${TermuxEnv.arch()})")
+        KLog.i(TAG, "$what: ${TermuxEnv.BOOTSTRAP_TAG} (${TermuxEnv.arch()})")
         val cancel = AtomicBoolean(false)
         cancelFlag = cancel
         val previous = worker
