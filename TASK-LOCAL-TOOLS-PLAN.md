@@ -229,3 +229,31 @@ requestLegacyExternalStorage) since pkg is useless without them; B3 hardens, B4 
 - No reinstall/repair menu yet (recovery = "Phone (busybox)"); process kill mid-install leaves usr-staging (cleaned
   on next use, untested); conffile prompts on `pkg upgrade` untested on device; "Open link" chip offers mirror URLs
   during the first pkg update (noisy); first pkg update tests ~23 EU mirrors (~20 s).
+
+### Phone result 0.8.1 (2026-11-14 20:15, CPH2449 arm64): bootstrap 32 MB in 2.5 s, extract 3483 files in 1.75 s,
+no errors. Then the "Open link" chip opened a mirror URL (https://ro.mirror.flokinet.net) during the first pkg update.
+
+### Brief: B3+B4 — hardening and Termux app commands (release 0.8.2)
+B3 (hardening):
+1. "Open link" chip: never for package-manager output (lines with `Get:`, `Hit:`, `Ign:`, `Err:`, `Picking mirror`,
+   `Mirror`, `Fetched`, `Reading package lists`, and URLs of the configured mirrors / packages.termux.dev hosts), and
+   only after the screen has been quiet ~1.5 s with the URL in the bottom 8 lines. Unit tests with real pkg output.
+2. Non-following delete for usr/staging/cleanup (Files.walkFileTree without FOLLOW_LINKS; a symlink is unlinked,
+   never descended). Test: a symlink inside the tree to a dir outside survives with its contents.
+3. Phone-tab menu "Repair Termux packages…" (re-runs the bootstrap install over a fresh staging dir, keeps $HOME,
+   confirms first: "installed packages are removed, your home folder stays") and stale usr-staging removed at app start.
+4. `dpkg -i` by hand: relocate too (a dpkg wrapper via dpkg-divert or a `DPkg::Pre-Invoke`-independent wrapper in
+   usr/bin that relocates .deb arguments then execs the real dpkg). Test on the emulator with a downloaded Termux deb.
+5. Conffile prompts: on the emulator run `pkg upgrade` without `yes` after installing a few packages (openssh,
+   nano) and a later reinstall; there must be no "modified conffile" questions caused by relocation.
+B4 (Termux app commands inside Kabuk):
+6. `termux-wake-lock` / `termux-wake-unlock`: SessionService takes/releases a partial wake lock (+ the notification
+   says so). `termux-open <file|url>`: URLs as xdg-open; files via a FileProvider content:// share/view intent.
+   `termux-open-url` exists already.
+7. `am` / `termux-am`: support the common subset scripts use (`am start -a ACTION -d URI [-t TYPE] [-n comp]`,
+   `am broadcast` minimal) through the same file-drop channel as kabuk-open (or a local socket), started by Kabuk;
+   unsupported options → clear error. Check what termux-tools' scripts (termux-open, termux-reload-settings, …)
+   call and make those work or fail with a clear "not supported in Kabuk" message.
+8. `termux-reload-settings`: re-read ~/.termux/termux.properties for the few props Kabuk supports (extra-keys may
+   be ignored; say so), `termux-info` prints Kabuk's info instead of failing.
+Emulator evidence per point; README/docs, History 0.8.2; gate green; commits [claude]; report as text.
