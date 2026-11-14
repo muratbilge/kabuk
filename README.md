@@ -154,9 +154,13 @@ Termux's collection, with bash as the shell.
   `termux-notification-remove`, `termux-share`, `termux-battery-status`, `termux-wifi-connectioninfo` (JSON),
   `termux-volume`, `termux-media-scan`, `termux-download`. Same options and output as Termux:API; text can come
   from stdin. The rest (SMS, camera, location, sensors, dialogs, SAF, …) say "not supported in Kabuk".
+  `termux-notification --priority high|max` goes to the "Scripts (important)" channel (shown on top);
+  `termux-tts-speak` returns when the text has been spoken. After `pkg install termux-api` its scripts are Kabuk's
+  commands also when called by full path (`$PREFIX/bin/termux-toast`; 0.8.4).
 - `dpkg -i x.deb` by hand relocates the package like apt does (a copy; your .deb stays as it was).
 - **Repair**: "Repair Termux packages…" (Phone tab menu, Servers screen ⋮) downloads the base packages again and
   replaces everything under `usr` after a confirmation; installed packages are removed, the home folder stays.
+  When `usr` is there but its `login` or `bash` is missing, Phone tabs run busybox and Kabuk offers the repair.
 - The "Open link" chip ignores package-manager output (mirror URLs during `pkg update`) and the login message
   (nothing before your first keystroke, never a URL that was on screen then), and waits until the screen has been
   quiet for 1.5 s with the link in the bottom rows. `KABUK_VERSION` holds Kabuk's version (`TERMUX_VERSION` stays
@@ -229,6 +233,13 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.8.4 — polish.** `termux-notification --priority high|max` shows on top (new channel "Scripts (important)");
+  `termux-tts-speak` returns once the text is spoken (long texts too), and slow commands (a big `termux-media-scan`)
+  no longer give up after 10 s: Kabuk tells the waiting program it is still working (kabuk-open 4, Ctrl-C still
+  ends it). After `pkg install termux-api` its `$PREFIX/bin/termux-*` scripts no longer hang when called by full
+  path: Kabuk diverts them to its own commands (survives upgrades, undone when the package is removed), and
+  `$PREFIX/libexec/termux-api` says to call the commands by name. A damaged install (login or bash missing) gets
+  "Repair Termux packages" instead of the Install sheet; the Phone tab runs busybox meanwhile.
 - **0.8.3 — Termux:API commands.** Kabuk answers Termux:API's commands itself: clipboard, toast, vibrate, torch,
   text-to-speech, notifications with buttons that run commands, share, battery and Wi-Fi status (JSON), volume,
   media scan and downloads, with Termux:API's names, options and output, also when `pkg install termux-api` was run;

@@ -47,7 +47,7 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = {
             when {
-                state == InstallState.Offer -> TermuxInstaller.notNow()
+                state == InstallState.Offer || state == InstallState.OfferRepair -> TermuxInstaller.notNow()
                 state.running -> TermuxInstaller.hidden.value = true
                 else -> TermuxInstaller.dismiss()
             }
@@ -69,6 +69,19 @@ fun TermuxSheet(onOpenTerminal: () -> Unit) {
                     Buttons {
                         TextButton(onClick = { TermuxInstaller.notNow() }) { Text("Not now") }
                         Primary("Install") { TermuxInstaller.install(ctx) }
+                    }
+                }
+                InstallState.OfferRepair -> {
+                    Title("Termux packages are damaged")
+                    Body(
+                        "Termux's login or bash is missing, so this Phone tab runs busybox. Repair downloads the base " +
+                            "packages again (~${TermuxEnv.DOWNLOAD_MB} MB) and replaces everything Termux installed: " +
+                            "installed packages are removed, your home folder stays."
+                    )
+                    Body("Repair stays in the Phone tab's menu if you'd rather do it later.", muted = true)
+                    Buttons {
+                        TextButton(onClick = { TermuxInstaller.notNow() }) { Text("Not now") }
+                        Primary("Repair") { TermuxInstaller.repair(ctx) }
                     }
                 }
                 is InstallState.Downloading, InstallState.Verifying, is InstallState.Extracting -> {

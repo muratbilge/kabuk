@@ -307,6 +307,7 @@ private fun PhoneShellRow(onConnected: () -> Unit) {
     val state by app.kabuk.term.TermuxInstaller.state.collectAsState()
     val inst = app.kabuk.term.TermuxInstaller
     val installed = remember(state) { inst.supported(ctx) && inst.installed(ctx) }
+    val broken = remember(state) { inst.broken(ctx) }
     var menu by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -322,7 +323,11 @@ private fun PhoneShellRow(onConnected: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Phone shell", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (installed) "A shell on this phone, with Termux packages (pkg)" else "A shell on this phone, with busybox tools",
+                    when {
+                        installed -> "A shell on this phone, with Termux packages (pkg)"
+                        broken -> "Termux packages damaged: busybox for now (⋮ → Repair)"
+                        else -> "A shell on this phone, with busybox tools"
+                    },
                     style = MaterialTheme.typography.bodySmall, color = Muted,
                 )
             }
@@ -342,6 +347,9 @@ private fun PhoneShellRow(onConnected: () -> Unit) {
             }
             else if (state.running) androidx.compose.material3.DropdownMenuItem(
                 text = { Text("Installing Termux packages…") }, onClick = { menu = false; inst.hidden.value = false },
+            )
+            else if (broken) androidx.compose.material3.DropdownMenuItem(
+                text = { Text("Repair Termux packages…") }, onClick = { menu = false; inst.confirmRepair.value = true },
             )
             else androidx.compose.material3.DropdownMenuItem(
                 text = { Text("Install Termux packages…") }, onClick = { menu = false; inst.menu(ctx) },

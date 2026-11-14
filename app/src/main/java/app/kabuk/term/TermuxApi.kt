@@ -27,6 +27,7 @@ import android.os.Environment
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.webkit.URLUtil
 import android.widget.Toast
@@ -58,6 +59,8 @@ object TermuxApi {
     private const val TAG = "CMD"
     private const val NOT_IN_KABUK = "is not supported in Kabuk"
     const val CHANNEL = "scripts"
+    /** termux-notification --priority high|max: heads-up */
+    const val CHANNEL_HIGH = "scripts-high"
     /** Binder transactions are limited to ~1 MB: text shared through an intent stays well below */
     private const val MAX_SHARE_TEXT = 200_000
 
@@ -85,7 +88,7 @@ object TermuxApi {
         "termux-saf-stat" to "the storage access framework", "termux-saf-write" to "the storage access framework",
         "termux-keystore" to "the keystore", "termux-job-scheduler" to "the job scheduler",
         "termux-notification-list" to "reading notifications (needs notification access)",
-        "termux-notification-channel" to "own notification channels (Kabuk posts to its \"Scripts\" channel)",
+        "termux-notification-channel" to "own notification channels (Kabuk posts to its \"Scripts\" channels; --priority high picks \"Scripts (important)\")",
         "termux-brightness" to "changing the brightness (needs the special \"modify system settings\" permission)",
         "termux-wifi-scaninfo" to "Wi-Fi scans (needs location)", "termux-wifi-enable" to "switching Wi-Fi",
         "termux-media-player" to "the media player", "termux-speech-to-text" to "speech recognition",
@@ -527,6 +530,56 @@ object TermuxApi {
     private val ttsWaiting = mutableListOf<() -> Unit>()
     private val utterance = AtomicInteger()
 
+    /** One termux-tts-speak: answered when its last piece was spoken (or at the first error). Main thread. */
+    private class SpeechJob(val name: String, val chars: Int, var left: Int, val done: (Answer) -> Unit) {
+        var answered = false
+        fun finish(a: Answer) { if (!answered) { answered = true; done(a) } }
+    }
+    /** utterance id → its job */
+    private val speaking = HashMap<String, SpeechJob>()
+
+    /**
+     * [text] in pieces the engine accepts ([max] chars, TextToSpeech.getMaxSpeechInputLength): line by line like
+     * Termux:API reads stdin, a longer line split at the last space (or hard). Blank lines are dropped.
+     */
+    internal fun speechPieces(text: String, max: Int): List<String> {
+        val out = mutableListOf<String>()
+        for (raw in text.split('\n')) {
+            var line = raw.trim()
+            while (line.length > max) {
+                val cut = line.lastIndexOf(' ', max).takeIf { it > 0 } ?: max
+                out += line.substring(0, cut).trim()
+                line = line.substring(cut).trim()
+            }
+            if (line.isNotEmpty()) out += line
+        }
+        return out.filter { it.isNotEmpty() }
+    }
+
+    private val progress = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {}
+        override fun onDone(utteranceId: String?) { TabManager.main.post { piece(utteranceId, null) } }
+        @Deprecated("API 21", ReplaceWith("onError(utteranceId, errorCode)"))
+        override fun onError(utteranceId: String?) { TabManager.main.post { piece(utteranceId, "the text-to-speech engine could not speak the text") } }
+        override fun onError(utteranceId: String?, errorCode: Int) {
+            TabManager.main.post { piece(utteranceId, "the text-to-speech engine could not speak the text (error $errorCode)") }
+        }
+        override fun onStop(utteranceId: String?, interrupted: Boolean) { TabManager.main.post { piece(utteranceId, "speech was stopped") } }
+    }
+
+    /** Main thread: one piece is spoken ([error] null) or failed. */
+    private fun piece(id: String?, error: String?) {
+        val job = speaking.remove(id ?: return) ?: return
+        if (error != null) {
+            speaking.entries.removeAll { it.value === job }
+            if (!job.answered) KLog.w(TAG, "${job.name}: ${error.substringBefore(" (")}")
+            job.finish(Answer(1, "${job.name}: $error\n"))
+        } else if (--job.left == 0) {
+            if (!job.answered) KLog.i(TAG, "${job.name}: spoken (${job.chars} chars)")
+            job.finish(Answer(0, ""))
+        }
+    }
+
     private fun speak(ctx: Context, name: String, req: Req.Speak, done: (Answer) -> Unit) {
         val say = say@{
             val t = tts ?: return@say done(fail(name, "no engine", "no text-to-speech engine"))
@@ -537,13 +590,25 @@ object TermuxApi {
             t.setPitch(req.pitch)
             t.setSpeechRate(req.rate)
             val params = Bundle().apply { putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, req.stream) }
-            val r = t.speak(req.text, TextToSpeech.QUEUE_ADD, params, "kabuk-${utterance.incrementAndGet()}")
-            done(if (r == TextToSpeech.SUCCESS) ok(name, "queued (${req.text.length} chars)") else fail(name, "speak failed", "the text-to-speech engine refused the text"))
+            val pieces = speechPieces(req.text, runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000))
+            if (pieces.isEmpty()) return@say done(ok(name, "nothing to say"))
+            val job = SpeechJob(name, req.text.length, pieces.size, done)
+            for (p in pieces) {
+                val id = "kabuk-${utterance.incrementAndGet()}"
+                speaking[id] = job
+                if (t.speak(p, TextToSpeech.QUEUE_ADD, params, id) != TextToSpeech.SUCCESS) {
+                    speaking.entries.removeAll { it.value === job }
+                    return@say job.finish(fail(name, "speak failed", "the text-to-speech engine refused the text"))
+                }
+            }
         }
         if (tts != null && ttsEngine == req.engine) {
             if (ttsReady) say() else ttsWaiting += say
             return
         }
+        // another engine: what the old one still had queued is cut off
+        speaking.values.toSet().forEach { it.finish(Answer(1, "${it.name}: interrupted (another termux-tts-speak switched the engine)\n")) }
+        speaking.clear()
         tts?.shutdown()
         ttsReady = false
         ttsWaiting.clear()
@@ -553,6 +618,7 @@ object TermuxApi {
             TabManager.main.post {
                 if (status == TextToSpeech.SUCCESS) {
                     ttsReady = true
+                    tts?.setOnUtteranceProgressListener(progress)
                     ttsWaiting.toList().also { ttsWaiting.clear() }.forEach { it() }
                 } else {
                     tts = null
@@ -565,14 +631,29 @@ object TermuxApi {
         tts = if (req.engine != null) TextToSpeech(ctx, listener, req.engine) else TextToSpeech(ctx, listener)
     }
 
-    /** Called by [app.kabuk.Notifications.ensureChannels]. Silent: --sound and --vibrate are played per notification. */
-    fun createChannel(nm: NotificationManager) = nm.createNotificationChannel(
-        NotificationChannel(CHANNEL, "Scripts", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Notifications from programs in the Phone tab (termux-notification)"
-            setSound(null, null)
-            enableVibration(false)
-        }
-    )
+    /**
+     * Called by [app.kabuk.Notifications.ensureChannels]: "Scripts" and, for `--priority high|max`, "Scripts
+     * (important)" (heads-up). Both silent: --sound and --vibrate are played per notification.
+     */
+    fun createChannel(nm: NotificationManager) {
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "Scripts", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Notifications from programs in the Phone tab (termux-notification)"
+                setSound(null, null)
+                enableVibration(false)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_HIGH, "Scripts (important)", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "termux-notification --priority high or max: shown on top of other apps"
+                setSound(null, null)
+                enableVibration(false)
+            }
+        )
+    }
+
+    /** The channel a notification with termux-notification's --priority goes to. */
+    internal fun channelFor(priority: String) = if (priority == "high" || priority == "max") CHANNEL_HIGH else CHANNEL
 
     private const val NOTIFICATION_ID = 1
     private fun tag(id: String) = "script:$id"
@@ -587,7 +668,7 @@ object TermuxApi {
                 .putExtra(ScriptActionReceiver.EXTRA_COMMAND, it)
             PendingIntent.getBroadcast(ctx, 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
-        val b = Notification.Builder(ctx, CHANNEL)
+        val b = Notification.Builder(ctx, channelFor(n.priority))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentText(n.content)
             .setStyle(Notification.BigTextStyle().bigText(n.content))
@@ -782,11 +863,13 @@ Please read --help-actions for help with notification actions.
                            notification
   --on-delete action       action to execute when the the notification is cleared
   --ongoing                pin the notification
-  --priority prio          notification priority (high/low/max/min/default)
+  --priority prio          notification priority (high/low/max/min/default);
+                           high and max show on top ("Scripts (important)")
   --sound                  play a sound with the notification
   -t/--title title         notification title to show
   --vibrate pattern        vibrate pattern, comma separated as in 500,1000,200
 Accepted and ignored in Kabuk: --icon, --led-color, --led-on, --led-off, --channel. --type media is not supported.
+Kabuk's channels: "Scripts" (default, low, min) and "Scripts (important)" (high, max; heads-up).
 """
     private const val NOTIFY_ACTIONS_HELP = """This help refers to the arguments to options like --action, --on-delete, --button1-action.
 

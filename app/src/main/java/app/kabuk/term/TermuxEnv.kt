@@ -3,6 +3,7 @@ package app.kabuk.term
 import android.content.Context
 import android.os.Build
 import android.system.Os
+import app.kabuk.log.KLog
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -42,7 +43,13 @@ object TermuxEnv {
     fun old(ctx: Context) = File(root(ctx), "usr-old")
     /** leftovers of an install the process didn't finish (killed): removed at app start */
     fun stale(ctx: Context) = staging(ctx).exists() || old(ctx).exists()
-    fun installed(ctx: Context) = File(prefix(ctx), "bin/login").isFile
+    /** usr is in place with its login shell: Phone tabs start Termux's login (bash). */
+    fun installed(ctx: Context) = usable(prefix(ctx))
+    /** usr is there but its login or bash is missing: Phone tabs fall back to busybox, the UI offers Repair. */
+    fun broken(ctx: Context) = broken(prefix(ctx))
+
+    internal fun usable(prefix: File) = File(prefix, "bin/login").isFile && File(prefix, "bin/bash").isFile
+    internal fun broken(prefix: File) = prefix.isDirectory && !usable(prefix)
     fun zipFile(ctx: Context, arch: String) = File(File(ctx.cacheDir, "termux"), "bootstrap-$arch.zip")
 
     /**
@@ -76,6 +83,7 @@ object TermuxEnv {
             "KABUK_OPEN_DIR=${open.path}", "BROWSER=xdg-open",
             "KABUK_VERSION=${app.kabuk.BuildConfig.VERSION_NAME}", "KABUK_VERSION_CODE=${app.kabuk.BuildConfig.VERSION_CODE}",
         )
+        refreshHooks(prefix, env)
         return LocalTools.Setup(File(prefix, "bin/login").path, env.toTypedArray(), home, arrayOf("-login"), termux = true)
     }
 
@@ -181,20 +189,68 @@ object TermuxEnv {
         if (download) SafeDelete.tree(File(ctx.cacheDir, "termux"))
     }
 
-    /** apt's Pre-Install-Pkgs hook: every .deb is relocated before dpkg sees it (usr/libexec/kabuk/relocate-debs). */
-    internal fun writeAptHook(staging: File, prefix: File, fs: FsOps) {
-        val script = File(staging, "libexec/kabuk/relocate-debs")
-        script.parentFile!!.mkdirs()
-        script.writeText(RELOCATE_DEBS.replace("@PREFIX@", prefix.path))
-        fs.chmod(script, "700".toInt(8))
-        File(staging, "etc/apt/apt.conf.d").mkdirs()
-        File(staging, "etc/apt/apt.conf.d/99kabuk-relocate").writeText(
+    /**
+     * apt's hooks: Pre-Install-Pkgs relocates every .deb before dpkg sees it (usr/libexec/kabuk/relocate-debs);
+     * Post-Invoke makes the termux-api package's files Kabuk's (usr/libexec/kabuk/termux-api-sync). Written at
+     * install and checked at every tab start (installs from before 0.8.4 lack the Post-Invoke part). True when a
+     * file changed.
+     */
+    internal fun writeAptHook(staging: File, prefix: File, fs: FsOps): Boolean {
+        val root = prefix.parentFile!!
+        var changed = false
+        fun put(f: File, text: String, mode: Int? = null) {
+            if (f.isFile && runCatching { f.readText() }.getOrNull() == text) return
+            f.parentFile!!.mkdirs()
+            f.writeText(text)
+            mode?.let { fs.chmod(f, it) }
+            changed = true
+        }
+        put(File(staging, "libexec/kabuk/relocate-debs"), RELOCATE_DEBS.replace("@PREFIX@", prefix.path), "700".toInt(8))
+        put(File(staging, "libexec/kabuk/termux-api-sync"), termuxApiSync(prefix.path, File(root, "kabuk/bin").path), "700".toInt(8))
+        put(
+            File(staging, "etc/apt/apt.conf.d/99kabuk-relocate"),
             "// Kabuk: Termux packages are built for /data/data/com.termux; rewrite each .deb for this app first\n" +
                 "DPkg::Pre-Install-Pkgs { \"${prefix.path}/libexec/kabuk/relocate-debs\"; };\n" +
+                "// Kabuk answers termux-api's commands itself: its scripts by full path too (no Termux:API app)\n" +
+                "DPkg::Post-Invoke { \"[ ! -x ${prefix.path}/libexec/kabuk/termux-api-sync ] || ${prefix.path}/libexec/kabuk/termux-api-sync || true\"; };\n" +
                 "// relocated .debs are stored uncompressed (fast to repack): don't keep them in cacheDir\n" +
-                "APT::Keep-Downloaded-Packages \"false\";\nBinary::apt::APT::Keep-Downloaded-Packages \"false\";\n"
+                "APT::Keep-Downloaded-Packages \"false\";\nBinary::apt::APT::Keep-Downloaded-Packages \"false\";\n",
         )
+        return changed
     }
+
+    /**
+     * Tab start: the hooks are current, and when the termux-api package's files aren't Kabuk's yet (it was installed
+     * before 0.8.4, or removed since) the sync runs once in the background. Never throws.
+     */
+    private fun refreshHooks(prefix: File, env: List<String>) {
+        runCatching { if (writeAptHook(prefix, prefix, AndroidFs)) KLog.i("TERMUX", "apt hooks updated") }
+            .onFailure { KLog.w("TERMUX", "apt hooks not written: ${it.javaClass.simpleName}") }
+        if (!termuxApiNeedsSync(prefix) || !syncing.compareAndSet(false, true)) return
+        Thread({
+            try {
+                val r = LocalTools.run(listOf(File(prefix, "bin/sh").path, File(prefix, "libexec/kabuk/termux-api-sync").path), timeoutSec = 60, env = env.toTypedArray())
+                KLog.i("TERMUX", "termux-api package synced at tab start (${r.describe()})")
+            } finally { syncing.set(false) }
+        }, "termux-api-sync").start()
+    }
+
+    private val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** The package is installed but libexec/termux-api isn't Kabuk's stub, or it is gone but Kabuk's diversions stayed. */
+    internal fun termuxApiNeedsSync(prefix: File): Boolean {
+        val listed = File(prefix, "var/lib/dpkg/info/termux-api.list").isFile
+        val stub = runCatching { File(prefix, "libexec/termux-api").readText().contains(STUB_MARK) }.getOrDefault(false)
+        val diverted = runCatching { File(prefix, "var/lib/dpkg/diversions").readText().contains("/libexec/kabuk/termux-api/") }.getOrDefault(false)
+        return if (listed) !stub else diverted
+    }
+
+    private const val STUB_MARK = "Kabuk answers termux-* commands itself"
+
+    /** For tests and [writeAptHook]: the sync script for [prefix] with Kabuk's commands in [kabukBin]. */
+    internal fun termuxApiSync(prefix: String, kabukBin: String) = TERMUX_API_SYNC
+        .replace("@PREFIX@", prefix).replace("@KBIN@", kabukBin).replace("@NAMES@", TermuxApi.NAMES.joinToString(" "))
+        .replace("@MARK@", STUB_MARK)
 
     /** `etc/termux/chosen_mirrors` → `mirrors/<group>`, what `termux-change-repo` makes; pkg picks among those. */
     internal fun writeMirrorChoice(staging: File, fs: FsOps) {
@@ -335,6 +391,64 @@ object TermuxEnv {
         |done
         |""".trimMargin()
 
+    /**
+     * apt's `DPkg::Post-Invoke` (and the dpkg wrapper, and tab start when needed): termux-api's `usr/bin/termux-*`
+     * scripts and `usr/libexec/termux-api` wait forever for the Termux:API app when called by full path. Each of the
+     * package's bin files Kabuk answers (TermuxApi.NAMES) is diverted (`dpkg-divert --local --rename`) to
+     * usr/libexec/kabuk/termux-api/ and replaced by a link to Kabuk's command in files/kabuk/bin; each file it ships
+     * directly in usr/libexec becomes a stub that says so (exit 1). Upgrades unpack into the diverted names, so
+     * this survives them; once the package is gone the links and diversions go too. Idempotent, quiet when there is
+     * nothing to do.
+     */
+    private val TERMUX_API_SYNC = """
+        |#!@PREFIX@/bin/sh
+        |# Kabuk: makes the termux-api package's commands Kabuk's (no Termux:API app); see TermuxEnv.kt.
+        |P=@PREFIX@
+        |K=@KBIN@
+        |D=${'$'}P/libexec/kabuk/termux-api
+        |export LC_ALL=C
+        |listed=${'$'}("${'$'}P/bin/dpkg-query" -L termux-api 2>/dev/null | grep -v '^locally diverted to: \|^diverted by ') || listed=
+        |ours=${'$'}("${'$'}P/bin/dpkg-divert" --list 2>/dev/null | grep -F " to ${'$'}D/") || ours=
+        |[ -z "${'$'}listed" ] && [ -z "${'$'}ours" ] && exit 0
+        |ships() { printf '%s\n' "${'$'}listed" | grep -qxF "${'$'}1"; }
+        |diverted() { printf '%s\n' "${'$'}ours" | grep -qxF "local diversion of ${'$'}1 to ${'$'}2"; }
+        |n_div=0; n_undo=0
+        |# ${'$'}1 file, ${'$'}2 diverted name, ${'$'}3 link target (empty: a stub)
+        |sync() {
+        |  if ships "${'$'}1"; then
+        |    if ! diverted "${'$'}1" "${'$'}2"; then
+        |      mkdir -p "${'$'}D"
+        |      "${'$'}P/bin/dpkg-divert" --local --rename --divert "${'$'}2" --add "${'$'}1" > /dev/null || return 1
+        |      n_div=${'$'}((n_div + 1))
+        |    fi
+        |    if [ -n "${'$'}3" ]; then
+        |      [ -L "${'$'}1" ] && [ "${'$'}(readlink "${'$'}1")" = "${'$'}3" ] || ln -sfn "${'$'}3" "${'$'}1"
+        |    elif ! grep -qF '@MARK@' "${'$'}1" 2>/dev/null; then
+        |      printf '#!%s/bin/sh\necho "%s: @MARK@ (no Termux:API app needed); call them by name, e.g. termux-toast hi" >&2\nexit 1\n' \
+        |        "${'$'}P" "${'$'}{1##*/}" > "${'$'}1.kabuk-tmp" && chmod 755 "${'$'}1.kabuk-tmp" && mv -f "${'$'}1.kabuk-tmp" "${'$'}1"
+        |    fi
+        |  elif diverted "${'$'}1" "${'$'}2"; then
+        |    # the package is gone: Kabuk's link or stub, then the diversion
+        |    if [ -L "${'$'}1" ] || grep -qF '@MARK@' "${'$'}1" 2>/dev/null; then rm -f "${'$'}1"; fi
+        |    "${'$'}P/bin/dpkg-divert" --local --rename --remove "${'$'}1" > /dev/null || return 1
+        |    n_undo=${'$'}((n_undo + 1))
+        |  fi
+        |}
+        |rc=0
+        |for n in @NAMES@; do
+        |  sync "${'$'}P/bin/${'$'}n" "${'$'}D/${'$'}n" "${'$'}K/${'$'}n" || rc=1
+        |done
+        |# files directly in usr/libexec: the package's (libexec/termux-api, ...) and ones diverted earlier
+        |for f in ${'$'}( { printf '%s\n' "${'$'}listed" | grep -x "${'$'}P/libexec/[^/]*"
+        |    printf '%s\n' "${'$'}ours" | sed -n "s|^local diversion of \(${'$'}P/libexec/[^/]*\) to .*|\1|p"; } | sort -u); do
+        |  [ -d "${'$'}f" ] && continue
+        |  sync "${'$'}f" "${'$'}D/libexec-${'$'}{f##*/}" "" || rc=1
+        |done
+        |[ "${'$'}n_div" -gt 0 ] && echo "kabuk: ${'$'}n_div termux-api files now run Kabuk's commands (no Termux:API app needed)"
+        |[ "${'$'}n_undo" -gt 0 ] && echo "kabuk: termux-api removed; Kabuk's termux-* commands stay (${'$'}n_undo diversions undone)"
+        |exit ${'$'}rc
+        |""".trimMargin()
+
     /** `termux-info` for Kabuk: Termux's asks the Termux app for its details; this prints Kabuk's. */
     private val TERMUX_INFO = """
         |#!@ROOT@/usr/bin/sh
@@ -382,14 +496,22 @@ object TermuxEnv {
         |# Kabuk: relocates .debs installed by hand (built for /data/data/com.termux), then runs the real dpkg.
         |real=@ROOT@/usr/bin/dpkg
         |hook=@ROOT@/usr/libexec/kabuk/relocate-debs
-        |install=0
+        |sync=@ROOT@/usr/libexec/kabuk/termux-api-sync
+        |install=0; change=0
         |for a in "${'$'}@"; do
         |  case "${'$'}a" in
-        |    --install|--unpack|-i|-[!-]*i*) install=1 ;;
+        |    --install|--unpack|-i|-[!-]*i*) install=1; change=1 ;;
         |    -R|--recursive|-[!-]*R*) echo "kabuk: dpkg -R does not relocate; install the .debs by name or with apt install ./x.deb" >&2 ;;
+        |    -r|--remove|-P|--purge|--configure|-[!-]*[rP]*) change=1 ;;
         |  esac
         |done
-        |if [ "${'$'}install" = 0 ] || [ ! -x "${'$'}hook" ]; then exec "${'$'}real" "${'$'}@"; fi
+        |if [ "${'$'}install" = 0 ] || [ ! -x "${'$'}hook" ]; then
+        |  { [ "${'$'}change" = 1 ] && [ -x "${'$'}sync" ]; } || exec "${'$'}real" "${'$'}@"
+        |  # dpkg -r/-P/--configure by hand: termux-api's files may have changed (Post-Invoke covers apt only)
+        |  "${'$'}real" "${'$'}@"; rc=${'$'}?
+        |  "${'$'}sync" || true
+        |  exit ${'$'}rc
+        |fi
         |w=${'$'}(mktemp -d "${'$'}{TMPDIR:-@ROOT@/usr/tmp}/kabuk-dpkg.XXXXXX") || exit 1
         |trap 'rm -rf "${'$'}w"' EXIT
         |n=${'$'}#; i=0
@@ -407,7 +529,9 @@ object TermuxEnv {
         |done
         |shift "${'$'}n"
         |if [ -s "${'$'}w/list" ]; then "${'$'}hook" < "${'$'}w/list" || { echo "kabuk: relocating the .deb failed" >&2; exit 1; }; fi
-        |"${'$'}real" "${'$'}@"
+        |"${'$'}real" "${'$'}@"; rc=${'$'}?
+        |[ ! -x "${'$'}sync" ] || "${'$'}sync" || true
+        |exit ${'$'}rc
         |""".trimMargin()
 
     /** For tests: the dpkg wrapper as written for [root] (files dir). */
