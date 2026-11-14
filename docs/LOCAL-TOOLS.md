@@ -287,5 +287,79 @@ wrote one back.
 failures with the exception class (`install failed: UnknownHostException …`); tag `STORAGE`. Never file contents,
 never terminal text.
 
-**Not yet (B3/B4).** `termux-am`, `termux-wake-lock`, `termux-open` and other termux-tools commands that talk to the
-Termux app; a reinstall/repair of a broken prefix (today: "Phone (busybox)", then delete `files/usr` by hand).
+## Phase B hardening and Termux app commands (0.8.2)
+
+*Verified* on the emulator (android-35 x86_64, debug build of 0.8.2's code, 2026-11-14) unless marked otherwise.
+
+**Deletes never follow symlinks (`term/SafeDelete.kt`).** Kotlin's `File.deleteRecursively` decides "directory?"
+with `File.isDirectory`, which follows links. In 0.8.1 `StorageAccess.link` cleared `~/storage` with it before
+re-linking, so a *second* `termux-setup-storage` walked through `~/storage/shared` and deleted everything on shared
+storage the app could write (reproduced on the emulator with the 0.8.1 code: `/sdcard` was left with only
+`Android/`). `SafeDelete.tree` uses `Files.walkFileTree` without FOLLOW_LINKS: a symlink is unlinked, never
+entered; read-only dirs are made writable first. Used for `usr`, `usr-staging`, `usr-old`, the download cache,
+`~/storage` and busybox's `files/bin`. *Verified*: `termux-setup-storage` twice, then `/sdcard/Download/victim.txt`
+and `/sdcard/DCIM/p.jpg` still there.
+
+**Repair and leftovers.** "Repair Termux packages…" (Phone tab ⋮ once installed; Servers screen ⋮ on the Phone
+shell row) asks first ("installed packages are removed, your home folder stays"), then runs the same install over a
+fresh `usr-staging`; the swap is `usr` → `usr-old`, `usr-staging` → `usr` (rolled back if the second rename fails),
+then `usr-old` is deleted, so a failed repair leaves the old prefix working. `InstallMachine.repairing` changes the
+sheet's texts and makes "Restart shell" restart the open Termux tabs too. At app start
+(`TermuxInstaller.removeStale`) a leftover `usr-staging`/`usr-old` from a killed install is removed in the
+background; an install started meanwhile waits for it. *Verified*: home marker kept, `tree`/`ssh` gone, `nano`/`bash`
+back; a planted `usr-staging` with a link to `/sdcard/Download` and `usr-old` with a link to DCIM were removed at the
+next start (`removed a stale staging dir from an unfinished install (17 ms)`), the targets intact.
+
+**"Open link" chip (`term/ScreenLinks.kt`).** Only a URL within the 8 rows above the last non-blank row, only once
+the screen (text + cursor) has been unchanged for 1.5 s (`ChipGate`; a chip already shown stays while it is still
+the one found), and never on a package-manager line (`Get:`, `Hit:`, `Ign:`, `Err:`, `Picking mirror`, `Mirror`,
+`Fetched`, `Reading package lists`, `Failed to fetch`, `InRelease`, pkg's `[*] (n) https://…: ok` lines) or for a
+host of the configured mirrors (`etc/apt/sources.list*`, `etc/termux/mirrors/**`) or `packages*.termux.dev`.
+*Verified*: no chip at any time during and after the first `pkg update` (polled every second), and
+`echo https://example.com/kabuk-test` gets "Open link · example.com".
+
+**`dpkg -i` by hand.** `files/kabuk/bin/dpkg` (first on PATH, not owned by a package): for `-i`/`--install`/
+`--unpack` it copies each `.deb` argument into a temp dir, runs `relocate-debs` on the copies and calls the real
+`usr/bin/dpkg` with them (the user's file stays as downloaded); everything else is passed straight through. apt
+calls `usr/bin/dpkg` by its full path and relocates through its hook anyway. Not via `dpkg-divert`: kabuk/bin
+survives package upgrades without touching dpkg's database. `dpkg -R` prints a hint (not relocated).
+*Verified*: `apt download tree` then `dpkg -i tree_*.deb` → `kabuk: relocated 1-tree_2.3.2_x86%5f64.deb`,
+`tree v2.3.2`, `dpkg -L tree` shows `/data/data/app.kabuk/files/usr/bin/tree`.
+
+**Conffiles.** After `pkg install openssh`, `pkg upgrade -y` (4 packages: ca-certificates, command-not-found,
+liblz4, p11-kit) and `pkg reinstall -y openssh nano`: no "Configuration file … modified" question; `dpkg --verify`
+lists only `etc/apt/sources.list`, which pkg itself rewrites when it picks a mirror (Termux does the same; not
+caused by relocation, but `apt` may ask about it when a new `apt` ships a changed sources.list).
+
+**Termux app commands.** libkabuk-open.so (scripts/tools/kabuk-open.c, version 2) is linked in `files/kabuk/bin`
+as `am`, `termux-am`, `termux-open`, `termux-wake-lock`, `termux-wake-unlock`, `termux-reload-settings` (plus the
+URL names as before); `xdg-open`/`open` with something that isn't an http(s) URL work like `termux-open`. These
+names write `<time>-<pid>.req` into `files/open` ("kabuk-req 1", cwd, name, args; NUL-terminated); `UrlOpener`'s
+watcher hands it to `term/KabukCommands.kt`, which parses it (pure, `KabukCommandsTest`), runs it on the main thread
+and writes `<time>-<pid>.res` (exit code, then text); the program prints it and exits with that code (no answer in
+10 s: exit 1). termux-tools' own scripts in `usr/bin` call `am …com.termux…`, which lands in Kabuk's `am` and is
+mapped: `startservice -a com.termux.service_wake_lock|unlock` → wake lock, `broadcast -n
+com.termux/com.termux.app.TermuxOpenReceiver` → termux-open, `broadcast -a com.termux.app.reload_style` → reload.
+- `termux-wake-lock`/`-unlock`: `SessionService.setWakeLock` takes/releases the partial wake lock + Wi-Fi lock of the
+  notification's button; the notification says "wake lock on (CPU stays awake)". *Verified*: `dumpsys power` shows
+  `PARTIAL_WAKE_LOCK 'kabuk:sessions'` after it and `REL kabuk:sessions` after unlock, also through Termux's own
+  `usr/bin/termux-wake-lock` script.
+- `termux-open [--send|--view] [--chooser] [--content-type T] <file|url>`: http(s) through `UrlOpener` (also from the
+  background, as a snackbar); mailto/tel/sms/geo/market as VIEW; files as `content://app.kabuk.files/…`
+  (androidx FileProvider, `res/xml/file_paths.xml`: filesDir and shared storage; a path under
+  `/data/data/app.kabuk/files` is mapped onto filesDir first, the provider compares canonical paths and on
+  Android 15 `/data/user/0` is a separate mount) with a read grant; MIME type from the extension. *Verified*:
+  `termux-open pic.png` opened Gallery with the content URI, `--send` the share sheet, an https URL the browser.
+- `am`/`termux-am`: `start`, `broadcast` with `-a -d -t -c -n -f --es/-e --esn --ez --ei --el --ef --eu --esa --user
+  0|current --grant-read-uri-permission -W`; other subcommands/options, other services, `com.termux*` targets
+  (Termux:API) → exit 1 with "… is not supported in Kabuk". Real `am` (app_process) is shadowed.
+- `termux-reload-settings`: `~/.termux/termux.properties` (or `~/.config/termux/`): `terminal-transcript-rows`
+  (100..50000 → scrollback of new tabs), `bell-character` (vibrate|ignore), `volume-keys` (virtual|volume) go into
+  Kabuk's settings; the other keys are listed as ignored (extra-keys: Kabuk has its own key bar; colors.properties,
+  font.ttf: Settings → Theme). *Verified*: "Applied: terminal-transcript-rows=12000 (new tabs), bell-character=ignore /
+  Ignored (not supported in Kabuk): extra-keys, use-black-ui".
+- `termux-info` (a script in kabuk/bin): Kabuk's version (`KABUK_VERSION`), architecture, repositories, mirror group,
+  upgradable packages, termux-tools version, package count, Android/kernel/device, LD_PRELOAD.
+- busybox's shell gets `termux-open`, `termux-wake-lock`, `termux-wake-unlock` too (not `am`: `/system/bin/am`
+  stays reachable there; BinDir layout 3). *Verified*: `termux-wake-lock`/`-unlock` in a "Phone (busybox)" tab.
+Logs: tag `CMD`, the command and the intent's action / scheme + host (`dat=geo:…`), never full URIs, paths or extras.

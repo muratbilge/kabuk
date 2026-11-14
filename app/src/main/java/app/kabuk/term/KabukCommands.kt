@@ -204,7 +204,7 @@ Open a file or URL in an external app.
         if (kind == "broadcast" && s.action == "com.termux.app.reload_style") return Action.ReloadSettings
         if (s.pkg?.startsWith("com.termux") == true) {
             val what = if (s.pkg.startsWith("com.termux.api")) "Termux:API" else "the Termux app (${s.pkg})"
-            return Action.Reply(1, "$name: this intent is for $what, which Kabuk replaces; $NOT_IN_KABUK\n")
+            return Action.Reply(1, "$name: this intent is for $what; that $NOT_IN_KABUK\n")
         }
         if (kind == "start") {
             if (s.action == null && s.data == null && s.pkg == null) return Action.Reply(1, "$name: start needs -a, -d or -n\n")
@@ -368,7 +368,7 @@ Open a file or URL in an external app.
             else Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         KLog.i(TAG, "$name: a file ($type, ${if (a.send) "send" else "view"})")
-        return startActivity(ctx, name, wrap(i, a.chooser), null, "a $type file")
+        return startActivity(ctx, name, wrap(i, a.chooser), null, "a file ($type)")
     }
 
     private fun wrap(i: Intent, chooser: Boolean): Intent =
