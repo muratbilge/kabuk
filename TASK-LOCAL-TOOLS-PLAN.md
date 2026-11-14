@@ -113,3 +113,26 @@ OOM kills happened, retry).
 5. README Phone tab section + History (label 0.7.1), docs/LOCAL-TOOLS.md, unit tests (URL file → intent filter
    http/https only, URL detection on screen text, BinDir reserved names). Gate green, commits `[claude] ...`, no push/
    release/version bump. Report back as text (subagents can't write report files).
+
+## Brief: step 3b (0.7.2) — fixes from Murat's first use on the phone (2026-11-14)
+0.7.1 runs on the phone (TOOLS: busybox, rclone, kabuk-open ok). Murat then hit:
+- `ping google.com` → `ping: bad address 'google.com'` (static bionic busybox has no DNS: Android resolves via netd).
+- `ping 1.1.1.1` → `ping: permission denied (are you root?)` (busybox ping wants a raw socket; Android's
+  /system/bin/ping uses ICMP "ping sockets", allowed for apps, and resolves names).
+- The prompt shows `/data/data/app.kabuk/files/home $` instead of `~ $` (HOME is filesDir = /data/user/0/...,
+  the shell's cwd resolves to /data/data/..., so ash's \w doesn't abbreviate).
+Fix:
+1. busybox linked **dynamically** against bionic (NDK clang `--target=<triple>28`, not static), so getaddrinfo goes
+   through netd and DNS works for wget/nc/ping/telnet etc. API 28 because glob/getrandom/syncfs need it: the tools
+   then need Android 9+ (the app's minSdk 26 stays; on 8.x the self-test reports FAILED — document). Keep the
+   source edits only if still needed. Check `readelf -d` (NEEDED libc.so/libm.so/libdl.so only, interpreter
+   /system/bin/linker64), size, and that the cache stamp forces a rebuild.
+2. Applets that Android's /system/bin does better are not linked: at least ping, ping6 (and traceroute/traceroute6
+   if /system/bin has them on the emulator; check `ls /system/bin`). A small explicit list in LocalTools
+   (`PREFER_SYSTEM`), unit-tested.
+3. HOME and the shell's start dir use the same canonical path (`File.canonicalPath` of filesDir/home, or set cwd to
+   exactly HOME's string) so the prompt shows `~`. Unit-test what can be tested.
+4. Emulator check (docker as before): `wget -O- http://example.com | head -3` (DNS ok), `nc -z example.com 80`,
+   `ping -c1 google.com` (→ /system/bin/ping, ok or at least not "bad address"/"are you root"), prompt shows `~ $`,
+   TOOLS self-test lines ok, `which ping` → /system/bin/ping.
+5. README/docs (History 0.7.2), gate green, commits `[claude]`, report as text.
