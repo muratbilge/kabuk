@@ -19,7 +19,9 @@ android {
     defaultConfig {
         applicationId = "app.kabuk"
         minSdk = 26
-        targetSdk = 35
+        // 28, not 35: Termux's packages run from the app's data dir, which W^X forbids from targetSdk 29 on
+        // (TASK-LOCAL-TOOLS-PLAN.md, phase B: the B0 audit). Android 15/16 install apps from target 24 up.
+        targetSdk = 28
         versionCode = appVersionCode
         versionName = appVersionName
 
@@ -66,9 +68,14 @@ android {
         }
     }
 
+    lint {
+        // targetSdk 28 is deliberate (see defaultConfig); Kabuk is not distributed through Google Play
+        disable += setOf("ExpiredTargetSdkVersion", "OldTargetApi")
+    }
+
     packaging {
         // Extract jniLibs to nativeLibraryDir at install: the Phone tab's tools (lib<name>.so) are exec'd from there,
-        // the only place a targetSdk-35 app may run its own binaries (docs/LOCAL-TOOLS.md).
+        // kept at targetSdk 28 too (exec from the data dir would work there, but the tools stay where they were) (docs/LOCAL-TOOLS.md).
         jniLibs { useLegacyPackaging = true }
         resources.excludes += setOf("META-INF/versions/**", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA",
             "META-INF/BCKEY.DSA", "META-INF/BCKEY.SF", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")

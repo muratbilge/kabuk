@@ -28,12 +28,7 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "Open sessions", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Shown while terminal sessions are open"
-                setShowBadge(false)
-            }
-        )
+        app.kabuk.Notifications.ensureChannels(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,6 +98,14 @@ class SessionService : Service() {
         private var instance: SessionService? = null
 
         @Volatile private var lastShown = ""
+
+        /** Called by [app.kabuk.Notifications.ensureChannels]. */
+        fun createChannel(nm: NotificationManager) = nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "Open sessions", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Shown while terminal sessions are open"
+                setShowBadge(false)
+            }
+        )
 
         /** re-posts the notification, but only when its text changed (agents are polled every 3 s) */
         fun refresh() {

@@ -7,7 +7,8 @@ live log after the 0.7.0 update.
 
 ## Why tools live in nativeLibraryDir
 
-Kabuk targets SDK 35. Since Android 10 an app with targetSdk >= 29 cannot exec a file it wrote into its own data
+Kabuk targeted SDK 35 until 0.7.2 and targets SDK 28 since 0.8.0 (groundwork for Termux packages, phase B of
+TASK-LOCAL-TOOLS-PLAN.md); the tools stay in nativeLibraryDir regardless. Since Android 10 an app with targetSdk >= 29 cannot exec a file it wrote into its own data
 dir (W^X; SELinux denies `execute` on `app_data_file` for `untrusted_app`). Termux avoids this only by staying on
 targetSdk 28. The files the package installer extracts to `applicationInfo.nativeLibraryDir` (`/data/app/…/lib/<abi>`,
 label `apk_data_file`) can be exec'd. So:

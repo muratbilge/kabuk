@@ -32,20 +32,24 @@ object AgentNotifier {
 
     fun init(c: Context) {
         ctx = c
-        val nm = c.getSystemService(NotificationManager::class.java)
+        // notifications of an earlier process: their buttons name tab ids that mean nothing now (ids start at 1
+        // again), and whatever is still open is posted afresh once the streams are back
+        c.getSystemService(NotificationManager::class.java).cancelAll()
+    }
+
+    /** Called by [app.kabuk.Notifications.ensureChannels], not at process start (see there why). */
+    fun createChannels(nm: NotificationManager) {
         nm.createNotificationChannel(NotificationChannel(NEEDS, "Agent needs you", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "An agent is waiting for an answer or approval"
         })
         nm.createNotificationChannel(NotificationChannel(DONE, "Agent finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "An agent finished its work"
         })
-        // notifications of an earlier process: their buttons name tab ids that mean nothing now (ids start at 1
-        // again), and whatever is still open is posted afresh once the streams are back
-        nm.cancelAll()
     }
 
     @Synchronized
     fun update(tab: SshTab) {
+        app.kabuk.Notifications.ensureChannels(ctx)
         val nm = ctx.getSystemService(NotificationManager::class.java)
         val now = tab.agents.value
         val seen = HashSet<String>()

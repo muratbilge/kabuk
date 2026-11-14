@@ -7,7 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.graphics.Color
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -26,9 +28,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import app.kabuk.data.Hosts
 import app.kabuk.data.Settings
+import app.kabuk.log.KLog
 import app.kabuk.term.TabManager
 import app.kabuk.term.TermTab
 import app.kabuk.term.TerminalCanvasView
@@ -61,7 +65,12 @@ class MainActivity : ComponentActivity() {
     private var screen by mutableStateOf<Screen>(Screen.Hosts)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Kabuk is always dark. "auto" follows the system's light/dark mode: below targetSdk 35 that gave dark status
+        // icons and a light navigation bar scrim over Kabuk's dark UI on a light-mode phone (B0 audit).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         val mods = ModifierState()
         val view = TerminalCanvasView(this, mods)
@@ -158,7 +167,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= 33 &&
+        // targetSdk <= 32 (Kabuk is 28): no runtime request, see onResume and [Notifications]
+        if (Build.VERSION.SDK_INT >= 33 && applicationInfo.targetSdkVersion >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
 
@@ -175,6 +185,48 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         TabManager.foreground = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // after the first frame: the activity is really in front when the channels are made
+        window.decorView.post { checkNotifications() }
+    }
+
+    /** Fresh install at targetSdk 28 on Android 13+: bring the system's prompt, else offer the settings page once. */
+    private fun checkNotifications() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        val fresh = Notifications.ensureChannels(this)
+        val prefs = getSharedPreferences("notifications", MODE_PRIVATE)
+        fun step() = Notifications.nextStep(Build.VERSION.SDK_INT, applicationInfo.targetSdkVersion,
+            Notifications.enabled(this), fresh, prefs.getBoolean("offered", false))
+        when (step()) {
+            Notifications.Step.NONE -> {}
+            // the system's dialog pauses this activity; when it is answered onResume comes back here (not fresh then).
+            // Still resumed after a while = no dialog came: offer the settings page instead.
+            Notifications.Step.WAIT_FOR_SYSTEM_PROMPT -> {
+                KLog.i("NOTIFY", "waiting for the system's notification prompt")
+                window.decorView.postDelayed({
+                    if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !Notifications.enabled(this)) {
+                        KLog.w("NOTIFY", "no system prompt came")
+                        offerNotificationSettings(prefs)
+                    }
+                }, 2500)
+            }
+            Notifications.Step.OFFER_SETTINGS -> offerNotificationSettings(prefs)
+        }
+    }
+
+    private fun offerNotificationSettings(prefs: android.content.SharedPreferences) {
+        if (prefs.getBoolean("offered", false)) return
+        prefs.edit().putBoolean("offered", true).apply()
+        KLog.i("NOTIFY", "notifications off: offering the settings page once")
+        TabManager.note("Notifications are off for Kabuk", "Turn on") {
+            runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+            }.onFailure { KLog.w("NOTIFY", "no notification settings page", it) }
+        }
     }
 
     override fun onStop() {

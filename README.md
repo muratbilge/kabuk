@@ -190,6 +190,12 @@ the notices of its Go modules in the same place).
 
 ## History
 
+- **0.8.0 — targetSdk 28, groundwork for Termux packages.** Kabuk targets SDK 28 (the level Termux stays on: it
+  may run programs from its own data dir), so `pkg install` of Termux packages can follow. The system bars are
+  dark explicitly (below target 35 "auto" gave dark icons and a light navigation bar). Notifications: at target 28
+  Android 13+ asks by itself only when the first channel is made with an activity in front, so the channels are
+  now made from the main screen after it shows; if notifications stay off, a one-time "Turn on" note opens the
+  app's notification settings. Upgrades keep a granted notification permission. busybox/rclone unchanged.
 - **0.7.2 — Phone tab fixes.** busybox is linked dynamically against bionic (API 28), so `wget`/`nc`/`telnet`
   resolve host names (the static build had no DNS on Android); busybox source no longer patched. `ping`, `ping6`,
   `traceroute6` come from `/system/bin` (busybox's wanted root). The prompt shows `~ $` (HOME is the canonical
