@@ -38,6 +38,9 @@ android {
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")
+            // The Phone tab's tools (scripts/build-tools.sh) are big; Murat's phone is arm64. Debug keeps x86_64 too
+            // for the emulator.
+            ndk { abiFilters += "arm64-v8a" }
         }
     }
 
@@ -64,6 +67,9 @@ android {
     }
 
     packaging {
+        // Extract jniLibs to nativeLibraryDir at install: the Phone tab's tools (lib<name>.so) are exec'd from there,
+        // the only place a targetSdk-35 app may run its own binaries (docs/LOCAL-TOOLS.md).
+        jniLibs { useLegacyPackaging = true }
         resources.excludes += setOf("META-INF/versions/**", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA",
             "META-INF/BCKEY.DSA", "META-INF/BCKEY.SF", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
     }

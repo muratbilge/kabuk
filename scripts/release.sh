@@ -16,6 +16,11 @@ if ! command -v java >/dev/null 2>&1; then
   JDK=$(ls -d "$HOME"/tools/jdk-17* 2>/dev/null | head -1)
   [ -n "$JDK" ] && export JAVA_HOME="$JDK" PATH="$JDK/bin:$PATH"
 fi
+# the Phone tab's tools (cached: a copy when nothing changed); a release without them would silently lose the tools
+"$ROOT/scripts/build-tools.sh"
+for tool in busybox; do
+  [ -s "app/src/main/jniLibs/arm64-v8a/lib$tool.so" ] || { echo "ERROR: $tool missing for arm64-v8a (scripts/build-tools.sh)" >&2; exit 1; }
+done
 ./gradlew --console=plain :app:assembleRelease -q
 IN=$(ls app/build/outputs/apk/release/kabuk-*-release.apk | head -1)
 VER=$(basename "$IN" | sed -E 's/kabuk-(.*)-release.apk/\1/')

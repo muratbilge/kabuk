@@ -135,8 +135,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             DiagnosticsSection()
 
             Spacer(Modifier.height(16.dp))
-            Text("Kabuk ${BuildConfig.VERSION_NAME} · terminal engine from Termux (Apache 2.0) · SSH by sshj · font JetBrains Mono (OFL)",
-                fontSize = 12.sp, color = Muted)
+            Text("Kabuk ${BuildConfig.VERSION_NAME} · terminal engine from Termux (Apache 2.0) · SSH by sshj · font JetBrains Mono (OFL)" +
+                " · Phone tab tools: BusyBox (GPL-2.0)", fontSize = 12.sp, color = Muted)
+            LicensesButton()
         }
     }
     if (confirmNewKey) AlertDialog(

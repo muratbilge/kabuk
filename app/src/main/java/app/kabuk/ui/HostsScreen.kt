@@ -141,7 +141,7 @@ fun HostsScreen(onConnected: () -> Unit, onEdit: (String?) -> Unit, onSettings: 
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text("Phone shell", style = MaterialTheme.typography.titleMedium)
-                        Text("Android's own shell, no packages", style = MaterialTheme.typography.bodySmall, color = Muted)
+                        Text("A shell on this phone, with busybox tools", style = MaterialTheme.typography.bodySmall, color = Muted)
                     }
                 }
             }

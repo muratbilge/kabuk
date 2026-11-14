@@ -97,9 +97,22 @@ question is still open, and starts agents as herdr workspaces. Kept until every 
   - After the first password login, the app offers to install its key on the server.
   - Saved passwords are encrypted. Host keys are checked like known_hosts (trust on first use, loud warning if
     one changes).
-- **Termux extras:** a phone shell (`/system/bin/sh`), volume keys as Ctrl / Fn (optional), pinch to zoom,
+- **Termux extras:** a shell on the phone (the Phone tab, below), volume keys as Ctrl / Fn (optional), pinch to zoom,
   5 color themes, bell vibration, keep screen on, and text shared from other apps lands in the prompt box.
   Long-press the app icon for per-server shortcuts.
+
+### Phone tab
+"Phone shell" on the Servers screen opens a terminal on the phone itself, like Termux: busybox `ash` (a login
+shell; `~/.profile` is made once and then yours) with about 260 busybox tools on PATH: `ls`, `grep`, `sed`, `awk`,
+`find`, `vi`, `less`, `tar`, `gzip`, `unzip`, `wget`, `nc`, `ps`, `top`, `diff`, `sha256sum`, `base64` and more.
+HOME is the app's own folder, `TMPDIR` its cache.
+- The tools ship inside the APK (`lib<name>.so`, built from pinned sources by `scripts/build-tools.sh`), because
+  Android only lets an app run programs from the folder its native libraries are installed to; Kabuk links them
+  into `files/bin`. They come with app updates; there is no `pkg install`.
+- Known gap: busybox `wget` and `nc` can't look up host names yet (a static binary has no route to Android's DNS
+  resolver); addresses work. Details and the design: `docs/LOCAL-TOOLS.md`.
+- The live log gets one line per tool when the first Phone tab opens (`TOOLS busybox: ok (BusyBox v1.37.0 …)`),
+  never what you type.
 
 Not included: Termux's package system (`pkg install`). Your server is the Linux machine.
 
@@ -123,9 +136,13 @@ NOTES="what changed" scripts/release.sh   # build, zipalign, sign, verify → ~/
                                           # publish kabuk-<code>.apk + signed update.json to ~/apk-share/kabuk
                                           # for the in-app updater (PUBLISH=0 skips that step)
 ./gradlew :app:testDebugUnitTest          # unit + screenshot tests → app/build/outputs/roborazzi/*.png
+scripts/build-tools.sh                    # the Phone tab's tools → app/src/main/jniLibs (gitignored, cached in
+                                          # ~/.cache/kabuk-tools; release.sh runs it first)
 ```
 
-Needs a JDK 17 and Android build-tools 35. The version lives in `app/build.gradle.kts` (`appVersionName`,
+Needs a JDK 17, Android build-tools 35 and, for the tools, NDK 29.0.14206865. Without `scripts/build-tools.sh` the
+debug APK still builds; its Phone tab then falls back to Android's `/system/bin/sh`. The release APK is arm64-v8a
+only. The version lives in `app/build.gradle.kts` (`appVersionName`,
 `appVersionCode`); a published versionCode is never reused, bump it for every release.
 
 The SSH integration test needs a throwaway server:
@@ -143,6 +160,7 @@ docker rm -f kabuk-sshd-test
 term/   TermTab (one tab) → SshTab (sshj, reconnect loop, the orch/herdr streams) / LocalTab (Termux TerminalSession)
         TerminalCanvasView: draws with Termux's TerminalRenderer; own touch, selection and keyboard handling
         TabManager: all tabs, prompts for background threads, clipboard; Themes
+        LocalTools: the Phone tab's bin dir (links into nativeLibraryDir), environment, self-test
 agents/ Orch (orchtool: watch stream, answers, bus, workspaces), Herdr (herdr CLI over SSH), AnswerLedger (answer
         once), AgentNotifier + AnswerReceiver (needs-you / asks-you / finished notifications with answer buttons)
 text/   Unwrap (re-join wrapped lines), QuickReplies (numbered menus on screen)
@@ -155,10 +173,15 @@ ui/     Compose: terminal, key bar, prompt box, agents sheet, workspace bar, ser
 ```
 
 Libraries: Termux terminal-emulator / terminal-view (Apache 2.0), sshj, BouncyCastle, Jetpack Compose.
-Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt).
+Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt). Phone tab: BusyBox 1.37.0 (GPL-2.0; licence and source
+offer in `app/src/main/assets/licenses/`, shown in Settings → Licences).
 
 ## History
 
+- **0.7.0 — tools in the Phone tab.** busybox 1.37.0 (static, NDK r29, arm64-v8a + x86_64) ships as
+  `libbusybox.so` and runs from nativeLibraryDir; `files/bin` holds a link per applet (rebuilt after every install
+  or update), the shell is busybox ash with HOME/TMPDIR/PREFIX/SHELL set, and a self-test line per tool goes to the
+  live log. Settings → Licences shows the GPL text and the source offer. Release APK arm64-v8a only.
 - **0.6.0 — task queues.** A workspace's task queue from the phone (orchtool P6A, `orch task add/cancel/done`):
   open-task count on the workspace chip, the task list with states and errors, a new task (several lines, the whole
   workspace or one tab, optionally after another task), cancel / mark done with confirmation; bus messages show
@@ -211,7 +234,9 @@ Font: JetBrains Mono (OFL, see FONT-LICENSE-OFL.txt).
 ## License
 
 Apache License 2.0, see `LICENSE`. Uses Termux's terminal-emulator and terminal-view (Apache 2.0), sshj
-(Apache 2.0), Bouncy Castle (MIT) and the JetBrains Mono font (SIL OFL 1.1, `FONT-LICENSE-OFL.txt`).
+(Apache 2.0), Bouncy Castle (MIT) and the JetBrains Mono font (SIL OFL 1.1, `FONT-LICENSE-OFL.txt`). The APK
+also contains BusyBox (GPL-2.0, a separate program run by the Phone tab; licence and source offer in
+`app/src/main/assets/licenses/`).
 
 `scripts/release.sh` signs with Android's debug key, which is fine for your own phone. To hand the app to
 others, sign it with your own release key.
