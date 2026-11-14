@@ -363,3 +363,68 @@ com.termux/com.termux.app.TermuxOpenReceiver` → termux-open, `broadcast -a com
 - busybox's shell gets `termux-open`, `termux-wake-lock`, `termux-wake-unlock` too (not `am`: `/system/bin/am`
   stays reachable there; BinDir layout 3). *Verified*: `termux-wake-lock`/`-unlock` in a "Phone (busybox)" tab.
 Logs: tag `CMD`, the command and the intent's action / scheme + host (`dat=geo:…`), never full URIs, paths or extras.
+
+## Termux:API commands and Phone-tab polish (0.8.3, `term/TermuxApi.kt`)
+
+*Verified* on the emulator (android-35 x86_64, debug build of 0.8.3's code, 2026-11-14) unless marked otherwise.
+Evidence (command output, screenshots): `~/.cache/kabuk-tools/b5-shots/`.
+
+**How they reach the app.** Termux's `termux-api` package calls the separate Termux:API app through `am broadcast`
+and a socket (`usr/libexec/termux-api`). Kabuk has no such app: every Termux:API name is a link to libkabuk-open.so
+(version 3) in `files/kabuk/bin` (first on PATH, so it wins over the package's `usr/bin` scripts; *verified* with
+`pkg install termux-api` 0.60.0: all 57 of its `bin/` names are shadowed) and in busybox's `files/bin` (BinDir
+layout 4). kabuk-open now sends every name that isn't a URL name as a request; `KabukCommands.parse` hands the
+Termux:API names to `TermuxApi.parse` (pure, `TermuxApiTest`), unknown names get exit 2. Options are parsed like
+getopts (bundled short options, options end at the first operand); usage texts and JSON follow Termux:API.
+
+**stdin.** A command that reads its input when it has no text argument (`termux-clipboard-set`, `termux-toast`,
+`termux-tts-speak`, `termux-share` without a file: read like `cat`; `termux-notification` without `-c`: only when
+stdin is not a terminal) answers `stdin` / `stdin-if-piped` instead of an exit code; kabuk-open then writes its
+stdin (≤ 1 MiB) as `<base>.in` and waits for the real answer; the app keeps the pending request for up to an hour
+(the user may be typing on the tty). *Verified*: `echo piped text | termux-clipboard-set`, typing on the tty +
+Ctrl-D, `echo … | termux-toast -s`, `echo … | termux-notification -t Piped`; `termux-notification -t x` on a tty
+returns at once with empty content.
+
+| Command | Kabuk does | Emulator check |
+|---|---|---|
+| `termux-clipboard-get` / `-set [text]` | ClipboardManager; get refuses (exit 1, clear message) when Kabuk isn't in front on Android 10+ | set/get round trip; from the background: "Android lets only the app on screen read the clipboard…", exit 1 |
+| `termux-toast [-s] [-g top\|middle\|bottom] [-b/-c ignored]` | Toast (target 28: gravity works) | toast shown at the bottom (screenshot) |
+| `termux-vibrate [-d ms] [-f]` | one-shot; skipped in silent mode unless `-f` | `CMD: termux-vibrate: 200 ms` (no vibrator to feel) |
+| `termux-torch on\|off` | CameraManager.setTorchMode (no permission) | on/off logged, no error |
+| `termux-tts-speak [-e -l -n -v -p -r -s] [text]` | one TextToSpeech per engine, QUEUE_ADD; answers once queued | error path only: the AVD has no TTS engine → "the text-to-speech engine did not start", exit 1 |
+| `termux-notification …`, `termux-notification-remove id` | channel "Scripts" (silent; `--sound`/`--vibrate` played per notification); tag `script:<id>`; `--action`, `--buttonN-action`, `--on-delete` → `ScriptActionReceiver` (not exported, immutable explicit PendingIntents) runs `sh -c` in the Phone tab's environment in the background, output discarded; no `--action`: tap opens Kabuk; `--image-path` → big picture; `--priority`, `--led-*`, `--icon`, `--channel` accepted, ignored (Android sets these per channel); `--type media` unsupported | posted with title/content/button (dumpsys + screenshot); button ran `termux-toast` (logged), tap ran `echo tapped > ~/tapped.txt`; remove cleared all three |
+| `termux-share [-a send\|view\|edit] [-c type] [-d] [-t title] [file]` | file via FileProvider (as termux-open), stdin as text (ACTION_SEND, ≤ 200 000 chars); chooser unless `-d` | share sheet "Sharing text / Subject"; file send → chooser; `-d` view → HTML viewer; missing file → exit 1 |
+| `termux-battery-status` | JSON like Termux:API 0.60 (present … cycle) | full JSON, `"plugged": "PLUGGED_AC"` |
+| `termux-wifi-connectioninfo` | JSON; needs ACCESS_WIFI_STATE (normal permission, added); SSID/BSSID need location: `"<unknown ssid>"`, never asks | `"ip": "10.0.2.16"`, `"ssid": "<unknown ssid>"` |
+| `termux-volume [stream volume]` | JSON array of call/system/ring/music/alarm/notification; set clamps to max; DND refusal → clear error | list; `music 3` then 3; bad stream → usage, exit 1 |
+| `termux-media-scan [-r] [-v] path…` | MediaScannerConnection; dirs: their files, `-r` the tree; links never followed (Files.walkFileTree without FOLLOW_LINKS); off the main thread; "Finished scanning N file(s)" | `/sdcard/Download/kt`: 2 files with `-r -v`; in `~/kt` a link to `$PREFIX/bin` was not entered (2 files, not hundreds) |
+| `termux-download [-t] [-d] [-p path] url` | DownloadManager, http(s) only; default: the public Download folder | `https://example.com/` → `/sdcard/Download/downloadfile.bin` (577 bytes) |
+
+**Not supported** (exit 1, "`<name>`: … is not supported in Kabuk (there is no Termux:API app…)"): sms-send/list/
+inbox, telephony-call/cellinfo/deviceinfo, camera-photo/info, microphone-record, location, sensor, fingerprint,
+contact-list, call-log, infrared-frequencies/transmit, nfc, usb, wallpaper, dialog, storage-get, saf-* (create,
+dirs, ls, managedir, mkdir, read, rm, stat, write), keystore, job-scheduler, notification-list (needs notification
+access), notification-channel, brightness (needs WRITE_SETTINGS, a special permission), wifi-scaninfo,
+wifi-enable, media-player, speech-to-text, tts-engines, audio-info, api-start/api-stop. Calling the package's own
+`$PREFIX/libexec/termux-api` (or `usr/bin/termux-*` by full path) still hangs waiting for the Termux:API app; only
+the names on PATH are Kabuk's.
+
+**"Open link" chip and the login message.** `LocalTab` records the transcript at the first keystroke
+(`beforeInput`); until then no chip, and later a URL that appears in that text as a whole (`ScreenLinks.printedBefore`;
+trailing sentence punctuation allowed, a longer URL is a different one) is never offered. *Verified*: fresh tab with
+the motd's https://termux.dev/issues in the bottom rows → no chip before or after typing; `echo
+https://example.com/kabuk-test` → "Open link · example.com"; `clear; echo https://termux.dev/issues` → no chip.
+
+**Several Phone tabs; busybox as failsafe.** *Verified*: three Termux tabs = three `bash` processes; closing the
+middle one ended only its bash. With `usr/bin/login` and `usr/bin/bash` renamed, the + menu offers only "Phone
+shell", which starts busybox ash (`SHELL=…/files/bin/sh`, Termux:API names work there too); the other open Termux
+tabs kept running; renamed back afterwards.
+
+**Environment.** `TERMUX_VERSION=0.118.3` stays (scripts gate on it); `KABUK_VERSION=<versionName>` and
+`KABUK_VERSION_CODE` are set in both shells (`TV=0.118.3 KV=0.8.2 KVC=38` on the emulator build, before the
+orchestrator's bump).
+
+**Logs.** Tag `CMD`, the command name and the outcome only (`termux-clipboard-set: set (16 chars)`, `termux-share:
+text, chooser`, `notification action finished (exit 0)`, `termux-download: queued https://example.com`); never
+clipboard/notification/share/speech text, paths, commands or full URLs. *Verified*: none of the test strings appear
+in any `Kabuk.*` logcat line.

@@ -56,6 +56,28 @@ object ScreenLinks {
         return null
     }
 
+    /** characters that can continue a URL (so `https://a.b` is not "in" `https://a.b/c`) */
+    private val URL_CHAR = Regex("""[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]""")
+
+    /**
+     * True when [url] appears as a whole in [before]: the text a session printed before its first input (the login
+     * motd with https://termux.dev and the wiki/community links, the first `pkg update`). The chip never offers those.
+     * A URL followed by sentence punctuation (`https://termux.dev.`) still counts.
+     */
+    fun printedBefore(before: String, url: String): Boolean {
+        if (url.isEmpty()) return false
+        var i = before.indexOf(url)
+        while (i >= 0) {
+            val next = before.getOrNull(i + url.length)
+            val after = before.getOrNull(i + url.length + 1)
+            val ends = next == null || !URL_CHAR.matches(next.toString()) ||
+                (next in ".,;:!?)" && (after == null || after.isWhitespace()))
+            if (ends) return true
+            i = before.indexOf(url, i + 1)
+        }
+        return false
+    }
+
     /** Hosts of the configured package mirrors: apt's sources and pkg's mirror lists under [prefix]/etc. */
     fun mirrorHosts(prefix: File): Set<String> {
         val files = mutableListOf<File>()

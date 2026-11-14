@@ -74,20 +74,17 @@ object TermuxEnv {
             "TERMUX__PREFIX=${prefix.path}", "TERMUX__HOME=${home.path}",
             "TERMUX_MAIN_PACKAGE_FORMAT=debian", "TERMUX_APP_PACKAGE_MANAGER=apt",
             "KABUK_OPEN_DIR=${open.path}", "BROWSER=xdg-open",
-            "KABUK_VERSION=${app.kabuk.BuildConfig.VERSION_NAME} (${app.kabuk.BuildConfig.VERSION_CODE})",
+            "KABUK_VERSION=${app.kabuk.BuildConfig.VERSION_NAME}", "KABUK_VERSION_CODE=${app.kabuk.BuildConfig.VERSION_CODE}",
         )
         return LocalTools.Setup(File(prefix, "bin/login").path, env.toTypedArray(), home, arrayOf("-login"), termux = true)
     }
 
     /**
      * Names of libkabuk-open.so in `files/kabuk/bin` (scripts/tools/kabuk-open.c): URLs go to [UrlOpener], the rest
-     * are requests [KabukCommands] answers. They shadow termux-tools' scripts of the same names, which talk to the
-     * Termux app (`am broadcast … com.termux/…`).
+     * are requests [KabukCommands] answers. They shadow termux-tools' and termux-api's scripts of the same names,
+     * which talk to the Termux app or the Termux:API app (`am broadcast … com.termux/…`).
      */
-    val OPENER_NAMES = listOf(
-        "xdg-open", "termux-open-url", "kabuk-open", "termux-open", "am", "termux-am",
-        "termux-wake-lock", "termux-wake-unlock", "termux-reload-settings",
-    )
+    val OPENER_NAMES = listOf("xdg-open", "termux-open-url", "kabuk-open") + KabukCommands.NAMES
 
     /**
      * `files/kabuk/bin`, first on PATH: Kabuk's replacements for termux-tools commands that talk to the Termux app
@@ -343,7 +340,7 @@ object TermuxEnv {
         |#!@ROOT@/usr/bin/sh
         |# Kabuk: termux-info (Termux's own asks the Termux app, which Kabuk replaces)
         |P=@ROOT@/usr
-        |echo "Kabuk ${'$'}{KABUK_VERSION:-?}: Termux packages relocated to ${'$'}P"
+        |echo "Kabuk ${'$'}{KABUK_VERSION:-?} (${'$'}{KABUK_VERSION_CODE:-?}): Termux packages relocated to ${'$'}P"
         |echo "Packages CPU architecture:"
         |dpkg --print-architecture 2>/dev/null
         |echo "Subscribed repositories:"
@@ -368,7 +365,11 @@ object TermuxEnv {
         |/system/bin/getprop ro.product.cpu.abilist
         |echo "LD_PRELOAD: ${'$'}{LD_PRELOAD:-}"
         |echo "Termux app commands in Kabuk: am (subset), termux-open, termux-open-url, termux-wake-lock,"
-        |echo "  termux-wake-unlock, termux-reload-settings, termux-setup-storage. No Termux:API or plugins."
+        |echo "  termux-wake-unlock, termux-reload-settings, termux-setup-storage."
+        |echo "Termux:API commands in Kabuk (no Termux:API app needed): termux-clipboard-get/-set, termux-toast,"
+        |echo "  termux-vibrate, termux-torch, termux-tts-speak, termux-notification(-remove), termux-share,"
+        |echo "  termux-battery-status, termux-wifi-connectioninfo, termux-volume, termux-media-scan, termux-download."
+        |echo "  The others (sms, camera, location, sensors, dialogs, ...) say they are not supported. No plugins."
         |""".trimMargin()
 
     /**

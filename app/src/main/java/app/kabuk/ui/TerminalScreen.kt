@@ -202,8 +202,11 @@ fun TerminalScreen(
         val gate = app.kabuk.term.ScreenLinks.ChipGate()
         while (true) {
             if (TabManager.foreground) {
-                val u = ui.view.screenLink { it in mirrors }
+                // nothing before the first input (login motd: https://termux.dev, wiki links; the first pkg update),
+                // and never a URL that was already on screen then
+                val u = if (!tab.typed) null else ui.view.screenLink { it in mirrors }
                     ?.takeIf { it !in ui.doneLinks && !app.kabuk.term.UrlOpener.wasHandled(it) }
+                    ?.takeIf { !app.kabuk.term.ScreenLinks.printedBefore(tab.beforeInput, it) }
                 ui.screenLink = gate.update(android.os.SystemClock.uptimeMillis(), ui.view.screenSignature(), u)
             }
             delay(500)

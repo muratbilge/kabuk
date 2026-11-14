@@ -117,4 +117,28 @@ class ScreenLinksTest {
         assertTrue(ScreenLinks.isTermuxRepoHost("packages-cf.termux.dev"))
         assertEquals("ro.mirror.flokinet.net", ScreenLinks.host("https://user@ro.mirror.flokinet.net:443/x"))
     }
+
+    /** B5: URLs the session printed before the first input (Termux's login motd) are never offered. */
+    @Test fun motdLinksAreNotOffered() {
+        val motd = """
+            Welcome to Termux!
+
+            Docs:       https://doc.termux.com
+            Community:  https://community.termux.com
+
+            Working with packages:
+             - Search:  pkg search <query>
+            Report issues at https://termux.com/issues
+            See https://termux.dev.
+        """.trimIndent()
+        assertTrue(ScreenLinks.printedBefore(motd, "https://doc.termux.com"))
+        assertTrue(ScreenLinks.printedBefore(motd, "https://community.termux.com"))
+        assertTrue(ScreenLinks.printedBefore(motd, "https://termux.com/issues"))
+        assertTrue(ScreenLinks.printedBefore(motd, "https://termux.dev"))
+        // a longer or different URL printed later is a new one
+        assertTrue(!ScreenLinks.printedBefore(motd, "https://termux.com"))
+        assertTrue(!ScreenLinks.printedBefore(motd, "https://doc.termux"))
+        assertTrue(!ScreenLinks.printedBefore(motd, "https://example.com/kabuk-test"))
+        assertTrue(!ScreenLinks.printedBefore("", "https://termux.dev"))
+    }
 }

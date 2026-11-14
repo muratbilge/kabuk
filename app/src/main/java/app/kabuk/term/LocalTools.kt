@@ -20,8 +20,10 @@ object LocalTools {
     val TOOLS = listOf("busybox", "rclone", "kabuk-open")
     /** More names for a tool (name -> tool); never taken by a busybox applet. kabuk-open hands URLs to [UrlOpener]. */
     val ALIASES = mapOf("xdg-open" to "kabuk-open", "open" to "kabuk-open", "termux-open-url" to "kabuk-open",
-        // Termux app commands (term/KabukCommands.kt); not `am`, /system/bin/am stays reachable in busybox's shell
-        "termux-open" to "kabuk-open", "termux-wake-lock" to "kabuk-open", "termux-wake-unlock" to "kabuk-open")
+        // Termux app + Termux:API commands (term/KabukCommands.kt, TermuxApi.kt); not `am`, /system/bin/am stays
+        // reachable in busybox's shell
+        "termux-open" to "kabuk-open", "termux-wake-lock" to "kabuk-open", "termux-wake-unlock" to "kabuk-open") +
+        TermuxApi.NAMES.associateWith { "kabuk-open" }
     /**
      * busybox applets never linked because Android's own /system/bin version works for an app and busybox's does not:
      * busybox ping/traceroute want a raw socket (root), /system/bin/ping uses ICMP "ping sockets" and netd's DNS.
@@ -66,6 +68,7 @@ object LocalTools {
             "ANDROID_DATA=/data", "ANDROID_ROOT=/system", "KABUK_OPEN_DIR=${open.absolutePath}",
             // rclone and other Go/CLI tools: no browser detection guesswork, xdg-open on PATH is the browser
             "BROWSER=xdg-open",
+            "KABUK_VERSION=${BuildConfig.VERSION_NAME}", "KABUK_VERSION_CODE=${BuildConfig.VERSION_CODE}",
         )
         // with the tab's environment: rclone wants a HOME, and the test should see what the shell sees
         if (!tested) { tested = true; Thread({ selfTest(bin, nativeDir, env) }, "tools-selftest").start() }
@@ -147,8 +150,11 @@ internal class BinDir(
     },
 ) {
     companion object {
-        /** Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out, 3: termux-* names). */
-        const val LAYOUT = 3
+        /**
+         * Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out, 3: termux-*
+         * names, 4: Termux:API names).
+         */
+        const val LAYOUT = 4
     }
 
     private val stampFile get() = File(bin, ".stamp")

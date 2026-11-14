@@ -47,7 +47,20 @@ class LocalTab(id: Long, ctx: Context, val busybox: Boolean = false) : TermTab(i
 
     override val emulator: TerminalEmulator? get() = session.emulator
 
-    override fun write(data: ByteArray, offset: Int, count: Int) = session.write(data, offset, count)
+    /** set at the first input: until then the "Open link" chip stays away (the login motd and first pkg update) */
+    @Volatile var typed = false
+        private set
+    /** what the session printed before the first input; URLs in it are never offered ([ScreenLinks.printedBefore]) */
+    @Volatile var beforeInput = ""
+        private set
+
+    override fun write(data: ByteArray, offset: Int, count: Int) {
+        if (!typed) {
+            beforeInput = runCatching { session.emulator?.screen?.transcriptTextWithFullLinesJoined.orEmpty() }.getOrDefault("").takeLast(64 * 1024)
+            typed = true
+        }
+        session.write(data, offset, count)
+    }
 
     override fun resize(columns: Int, rows: Int) = session.updateSize(columns, rows)
 

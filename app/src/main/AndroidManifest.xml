@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- termux-wifi-connectioninfo (a normal permission: granted at install; the SSID itself needs location, not asked) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -58,6 +60,8 @@
         </provider>
 
         <receiver android:name=".agents.AnswerReceiver" android:exported="false" />
+        <!-- termux-notification's action, button and on-delete commands (term/TermuxApi.kt) -->
+        <receiver android:name=".term.ScriptActionReceiver" android:exported="false" />
         <receiver android:name=".update.Updater$StatusReceiver" android:exported="false" />
 
         <service
