@@ -20,6 +20,15 @@ object LocalTools {
     val TOOLS = listOf("busybox", "rclone", "kabuk-open")
     /** More names for a tool (name -> tool); never taken by a busybox applet. kabuk-open hands URLs to [UrlOpener]. */
     val ALIASES = mapOf("xdg-open" to "kabuk-open", "open" to "kabuk-open", "termux-open-url" to "kabuk-open")
+    /**
+     * busybox applets never linked because Android's own /system/bin version works for an app and busybox's does not:
+     * busybox ping/traceroute want a raw socket (root), /system/bin/ping uses ICMP "ping sockets" and netd's DNS.
+     * (Android 15 has ping, ping6 and traceroute6 in /system/bin but no IPv4 traceroute, so busybox keeps that one.)
+     * With no link in bin, PATH finds the /system/bin one.
+     */
+    val PREFER_SYSTEM = setOf("ping", "ping6", "traceroute6")
+    /** busybox is linked against bionic's libc.so at API 28 (glob/getrandom/syncfs); older Android can't load it. */
+    const val BUSYBOX_MIN_SDK = 28
     /** Arguments that make each tool print its version (first output line is logged). */
     private val VERSION_ARGS = mapOf("busybox" to listOf("--help"), "rclone" to listOf("version"), "kabuk-open" to listOf("--version"))
     @Volatile private var tested = false
@@ -29,16 +38,18 @@ object LocalTools {
 
     /** Makes bin/home/tmp (bin is rebuilt only after an install or update) and returns the shell + environment. */
     fun prepare(ctx: Context): Setup {
-        val files = ctx.filesDir
+        // canonical: filesDir is /data/user/0/<pkg>/files, a symlink path; the shell's getcwd() sees /data/data/...
+        // and ash's \w only shows "~" when HOME is that same string
+        val files = ctx.filesDir.canonicalFile
         val nativeDir = File(ctx.applicationInfo.nativeLibraryDir)
         val bin = File(files, "bin")
-        val home = File(files, "home").apply { mkdirs() }
+        val home = homeDir(files).apply { mkdirs() }
         val tmp = File(ctx.cacheDir, "tmp").apply { mkdirs() }
         val open = File(files, "open")
         runCatching { UrlOpener.start(open) }.onFailure { KLog.w(TAG, "URL opener not started", it) }
         val busybox = runCatching {
-            BinDir(bin, nativeDir).sync("${BuildConfig.VERSION_CODE} ${nativeDir.absolutePath}")
-            File(bin, "busybox").takeIf { File(nativeDir, "libbusybox.so").isFile }
+            BinDir(bin, nativeDir).sync("${BuildConfig.VERSION_CODE} ${nativeDir.absolutePath} ${BinDir.LAYOUT}")
+            File(bin, "busybox").takeIf { File(nativeDir, "libbusybox.so").isFile && Build.VERSION.SDK_INT >= BUSYBOX_MIN_SDK }
         }.onFailure { KLog.w(TAG, "bin dir setup failed", it) }.getOrNull()
         if (busybox != null) writeProfileOnce(home)
         val shell = if (busybox != null) File(bin, "sh").absolutePath else "/system/bin/sh"
@@ -54,6 +65,9 @@ object LocalTools {
         if (!tested) { tested = true; Thread({ selfTest(bin, nativeDir, env) }, "tools-selftest").start() }
         return Setup(shell, env, home)
     }
+
+    /** HOME, as one canonical path, so the shell's cwd (which it reads back with getcwd) is the same string. */
+    internal fun homeDir(filesDir: File): File = File(filesDir, "home").canonicalFile
 
     /** A starting .profile for busybox ash; the user's own edits win, so it is never rewritten. */
     internal fun writeProfileOnce(home: File) {
@@ -116,11 +130,18 @@ internal class BinDir(
     private val aliases: Map<String, String> = LocalTools.ALIASES,
     /** more names applets must never take (for tools Kabuk may add later) */
     private val reserved: Set<String> = emptySet(),
+    /** applets left out so PATH finds Android's own program (/system/bin/ping) */
+    private val preferSystem: Set<String> = LocalTools.PREFER_SYSTEM,
     /** busybox's applet names, read by running the freshly linked `busybox --list` */
     private val listApplets: (File) -> List<String> = { bb ->
         LocalTools.run(listOf(bb.absolutePath, "--list")).takeIf { it.exit == 0 }?.output?.lines().orEmpty()
     },
 ) {
+    companion object {
+        /** Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out). */
+        const val LAYOUT = 2
+    }
+
     private val stampFile get() = File(bin, ".stamp")
 
     /** Returns true when the dir was (re)built. */
@@ -132,7 +153,7 @@ internal class BinDir(
         present.forEach { link(fresh, it, it) }
         aliases.filter { (name, tool) -> tool in present && name !in tools }.forEach { (name, tool) -> link(fresh, name, tool) }
         if ("busybox" in present) {
-            val taken = tools.toSet() + reserved + aliases.keys
+            val taken = tools.toSet() + reserved + aliases.keys + preferSystem
             listApplets(File(fresh, "busybox")).map(String::trim)
                 .filter { it.isNotEmpty() && '/' !in it && it !in taken && it != "." && it != ".." }
                 .forEach { link(fresh, it, "busybox") }

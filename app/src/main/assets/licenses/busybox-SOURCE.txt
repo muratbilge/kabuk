@@ -9,10 +9,9 @@ Corresponding source:
   SHA-256  3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
 
 How it is built: scripts/build-tools.sh in Kabuk's source repository (https://github.com/muratbilge/kabuk).
-The script is the complete build recipe: busybox's defconfig with a list of applets switched off, a static
-link against the Android NDK r29 (29.0.14206865) libc, and two small source edits that it applies itself
-(libbb/missing_syscalls.c and include/platform.h: busybox's own copies of getsid, sethostname, adjtimex
-and strchrnul are limited to old Android versions, because the NDK's libc already has them).
+The script is the complete build recipe: busybox's defconfig with a list of applets switched off, linked
+dynamically against Android's libc with the Android NDK r29 (29.0.14206865, API level 28). The busybox
+source is used unmodified.
 
 Written offer: for at least three years after you received this version of Kabuk, the author will give
 anyone a copy of the corresponding source above (the tarball plus the build script) on request,

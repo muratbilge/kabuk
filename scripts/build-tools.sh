@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build the Phone tab's tools (static binaries) and put them where Gradle packs them:
+# Build the Phone tab's tools (bionic executables) and put them where Gradle packs them:
 #   app/src/main/jniLibs/<abi>/lib<name>.so   (gitignored; extracted at install to nativeLibraryDir, the one
 #                                             place a targetSdk-35 app may exec its own files, see docs/LOCAL-TOOLS.md)
 #   scripts/build-tools.sh            -> all tools, arm64-v8a + x86_64
 #   ABIS="arm64-v8a" scripts/build-tools.sh
 # Sources are pinned (version + SHA-256 below) and built with the SDK's NDK. Results are cached in
-# ~/.cache/kabuk-tools/<tool>-<ver>-<abi>/ together with a stamp of this script, so a re-run is a copy
-# and an edit of this script (config, flags) rebuilds.
+# ~/.cache/kabuk-tools/<tool>-<ver>-<abi>/ together with a stamp of that tool's own part of this script (its build
+# function and settings, see tool_stamp), so a re-run is a copy and an edit of a tool's config or flags rebuilds
+# that tool only (rclone takes minutes; a busybox change must not rebuild it).
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NDK=${NDK:-$HOME/Android/Sdk/ndk/29.0.14206865}
@@ -14,9 +15,11 @@ TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 CACHE=${KABUK_TOOLS_CACHE:-$HOME/.cache/kabuk-tools}
 ABIS=${ABIS:-"arm64-v8a x86_64"}
 JOBS=$(nproc 2>/dev/null || echo 4)
-# Static binaries carry their own libc.a, so the API level only selects which bionic headers are visible; it does
-# not raise the app's minSdk (26). 35 is the newest platform the NDK ships and has glob/getrandom/syncfs.
-API=35
+# busybox is linked dynamically against bionic (libc.so via /system/bin/linker64): only then does getaddrinfo go
+# through Android's resolver (netd), so wget/nc/telnet can resolve names; a static binary has no DNS on a phone.
+# 28 because busybox needs glob/getrandom/syncfs (API 28): busybox needs Android 9+, the app's minSdk 26 stays
+# (on 8.x the self-test reports busybox FAILED and the Phone tab uses /system/bin/sh, see docs/LOCAL-TOOLS.md).
+BUSYBOX_API=28
 
 BUSYBOX_VER=1.37.0
 BUSYBOX_URL="https://busybox.net/downloads/busybox-$BUSYBOX_VER.tar.bz2"
@@ -69,21 +72,21 @@ fetch() {
   echo "$f"
 }
 
-STAMP=$(sha256sum "$0" | cut -c1-16)
+# tool_stamp <build function> <setting var>...: hash of the function's code, the named settings and the NDK path
+tool_stamp() {
+  local f=$1 v; shift
+  { declare -f "$f" triple; for v in "$@"; do echo "$v=${!v}"; done; echo "NDK=$NDK"; } | sha256sum | cut -c1-16
+}
 
 build_busybox() {
   local abi=$1 out="$CACHE/busybox-$BUSYBOX_VER-$1"
-  if [ "$(cat "$out/stamp" 2>/dev/null)" = "$STAMP" ] && [ -f "$out/libbusybox.so" ]; then return; fi
+  local stamp; stamp=$(tool_stamp build_busybox BUSYBOX_VER BUSYBOX_URL BUSYBOX_SHA256 BUSYBOX_API BUSYBOX_OFF BUSYBOX_OFF_DIRS BUSYBOX_KEEP)
+  if [ "$(cat "$out/stamp" 2>/dev/null)" = "$stamp" ] && [ -f "$out/libbusybox.so" ]; then return; fi
   local tar; tar=$(fetch "$BUSYBOX_URL" "$BUSYBOX_SHA256")
   local work="$CACHE/work/busybox-$abi"
   rm -rf "$work" "$out"; mkdir -p "$work" "$out"
   tar xjf "$tar" -C "$work" --strip-components=1
-  # busybox defines getsid/sethostname/adjtimex and strchrnul itself for old Android; bionic has them (API 21/24)
-  # and a static link then sees them twice. Limit busybox's copies to older APIs (our only source changes).
-  sed -i -e 's,^# include <sys/syscall.h>$,&\n# if __ANDROID_API__ < 21,' \
-    -e 's,^int pivot_root(,# endif\n&,' "$work/libbb/missing_syscalls.c"
-  sed -i 's,^# undef HAVE_STRCHRNUL$,# if __ANDROID_API__ < 24\n&\n# endif,' "$work/include/platform.h"
-  local mk=(make -C "$work" -j"$JOBS" HOSTCC=gcc "CC=$TC/clang --target=$(triple "$abi")$API"
+  local mk=(make -C "$work" -j"$JOBS" HOSTCC=gcc "CC=$TC/clang --target=$(triple "$abi")$BUSYBOX_API"
     "AR=$TC/llvm-ar" "NM=$TC/llvm-nm" "STRIP=$TC/llvm-strip" "OBJCOPY=$TC/llvm-objcopy" "OBJDUMP=$TC/llvm-objdump"
     KCONFIG_NOTIMESTAMP=1 SOURCE_DATE_EPOCH=0 KBUILD_BUILD_USER=kabuk KBUILD_BUILD_HOST=kabuk)
   "${mk[@]}" defconfig >/dev/null
@@ -96,13 +99,13 @@ build_busybox() {
     case " $BUSYBOX_KEEP " in *" $c "*) continue ;; esac
     sed -i "s/^CONFIG_$c=y$/# CONFIG_$c is not set/" "$work/.config"
   done
-  sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' "$work/.config"
+  sed -i 's/^CONFIG_STATIC=y$/# CONFIG_STATIC is not set/' "$work/.config"
   "${mk[@]}" oldconfig </dev/null >/dev/null
-  grep -q '^CONFIG_STATIC=y' "$work/.config" || die "busybox: static build not configured"
+  grep -q '^CONFIG_STATIC=y' "$work/.config" && die "busybox: must link dynamically (DNS through netd)"
   "${mk[@]}" busybox >"$work/build.log" 2>&1 || { tail -30 "$work/build.log" >&2; die "busybox $abi failed (log: $work/build.log)"; }
   "$TC/llvm-strip" -o "$out/libbusybox.so" "$work/busybox_unstripped"
   cp "$work/.config" "$out/busybox.config"
-  echo "$STAMP" >"$out/stamp"
+  echo "$stamp" >"$out/stamp"
   rm -rf "$work"
 }
 
@@ -115,7 +118,8 @@ goarch() {
 
 build_rclone() {
   local abi=$1 out="$CACHE/rclone-$RCLONE_VER-$1"
-  if [ "$(cat "$out/stamp" 2>/dev/null)" = "$STAMP" ] && [ -f "$out/librclone.so" ]; then return; fi
+  local stamp; stamp=$(tool_stamp build_rclone RCLONE_VER RCLONE_URL RCLONE_SHA256 RCLONE_VENDOR_URL RCLONE_VENDOR_SHA256 RCLONE_API GO)
+  if [ "$(cat "$out/stamp" 2>/dev/null)" = "$stamp" ] && [ -f "$out/librclone.so" ]; then return; fi
   [ -x "$GO" ] || die "go not found at $GO (set GO=)"
   local tar vendor; tar=$(fetch "$RCLONE_URL" "$RCLONE_SHA256"); vendor=$(fetch "$RCLONE_VENDOR_URL" "$RCLONE_VENDOR_SHA256")
   local work="$CACHE/work/rclone-$abi"
@@ -130,7 +134,7 @@ build_rclone() {
       -ldflags "-s -w -buildid= -X github.com/rclone/rclone/fs.Version=v$RCLONE_VER" . ) \
     >"$work/build.log" 2>&1 || { tail -30 "$work/build.log" >&2; die "rclone $abi failed (log: $work/build.log)"; }
   cp "$work/COPYING" "$out/COPYING"
-  echo "$STAMP" >"$out/stamp"
+  echo "$stamp" >"$out/stamp"
   rm -rf "$work"
 }
 
@@ -139,7 +143,7 @@ build_rclone() {
 build_kabuk_open() {
   local abi=$1 out="$CACHE/kabuk-open-$1"
   local src="$ROOT/scripts/tools/kabuk-open.c"
-  local stamp; stamp="$STAMP $(sha256sum "$src" | cut -c1-16)"
+  local stamp; stamp="$(tool_stamp build_kabuk_open RCLONE_API) $(sha256sum "$src" | cut -c1-16)"
   if [ "$(cat "$out/stamp" 2>/dev/null)" = "$stamp" ] && [ -f "$out/libkabuk-open.so" ]; then return; fi
   rm -rf "$out"; mkdir -p "$out"
   "$TC/clang" --target="$(triple "$abi")$RCLONE_API" -O2 -Wall -Werror -fPIE -pie -s \

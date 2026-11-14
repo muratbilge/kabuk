@@ -64,6 +64,27 @@ class LocalToolsTest {
         assertFalse(File(tmp.root, "bin.new").exists())
     }
 
+    @Test fun appletsThatAndroidDoesBetterAreLeftToSystemBin() {
+        val lib = nativeDir("busybox")
+        val bin = File(tmp.root, "bin")
+        BinDir(bin, lib) { listOf("ls", "ping", "ping6", "traceroute", "traceroute6", "wget", "nc") }.sync("35 /x")
+        assertEquals(setOf(".stamp", "busybox", "ls", "traceroute", "wget", "nc"), bin.list()!!.toSet())
+        // the default list: busybox ping wants a raw socket (root), /system/bin/ping uses ICMP ping sockets + netd DNS
+        assertTrue(LocalTools.PREFER_SYSTEM.containsAll(setOf("ping", "ping6", "traceroute6")))
+        assertTrue(LocalTools.PREFER_SYSTEM.none { it in LocalTools.TOOLS || it in LocalTools.ALIASES })
+    }
+
+    @Test fun homeIsCanonicalSoThePromptShowsTilde() {
+        // like Android: /data/user/0 is a symlink to /data/data, filesDir is handed out via the symlink
+        val real = tmp.newFolder("data", "app", "files")
+        val user0 = File(tmp.root, "user0").also { Files.createSymbolicLink(it.toPath(), real.parentFile.toPath()) }
+        val home = LocalTools.homeDir(File(user0, "files"))
+        assertEquals(File(real, "home").canonicalPath, home.path)
+        home.mkdirs()
+        // the shell's getcwd() after chdir(home) gives the canonical path: same string as HOME
+        assertEquals(home.path, home.toPath().toRealPath().toString())
+    }
+
     @Test fun withoutBusyboxTheDirIsEmpty() {
         val bin = File(tmp.root, "bin")
         assertTrue(BinDir(bin, nativeDir()) { error("not called") }.sync("1"))
@@ -80,14 +101,28 @@ class LocalToolsTest {
         assertEquals("my own", f.readText())
     }
 
+    /** busybox must be a dynamic bionic program (DNS through netd): bionic's linker as interpreter, libc.so needed. */
+    @Test fun builtBusyboxIsLinkedDynamicallyAgainstBionic() {
+        val sos = listOf("arm64-v8a", "x86_64").flatMap { listOf("src/main/jniLibs/$it/libbusybox.so", "app/src/main/jniLibs/$it/libbusybox.so") }
+            .map(::File).filter { it.isFile }
+        assumeTrue("busybox not built", sos.isNotEmpty())
+        for (so in sos) {
+            val text = String(so.readBytes(), Charsets.ISO_8859_1)
+            assertTrue("$so: interpreter", text.contains("/system/bin/linker64\u0000"))
+            assertTrue("$so: libc.so", text.contains("\u0000libc.so\u0000"))
+        }
+    }
+
     /**
-     * The real x86_64 busybox (scripts/build-tools.sh) is a static bionic binary, which also runs on a Linux x86_64
-     * host: link it like the app does and exec applets through the links. Skipped when the tools are not built.
+     * The real x86_64 busybox (scripts/build-tools.sh) links bionic dynamically (interpreter /system/bin/linker64), so
+     * it only runs where that exists (an Android x86_64 host); link it like the app does and exec applets through the
+     * links. Skipped when the tools are not built or there is no bionic linker (the emulator check covers it).
      */
     @Test fun builtBusyboxAppletsExecThroughLinks() {
         val so = listOf("src/main/jniLibs/x86_64/libbusybox.so", "app/src/main/jniLibs/x86_64/libbusybox.so")
             .map(::File).firstOrNull { it.isFile }
         assumeTrue("busybox not built", so != null && System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in setOf("amd64", "x86_64"))
+        assumeTrue("no bionic linker on this host", File("/system/bin/linker64").exists())
         val lib = tmp.newFolder("native")
         Files.copy(so!!.toPath(), File(lib, "libbusybox.so").toPath())
         File(lib, "libbusybox.so").setExecutable(true)
