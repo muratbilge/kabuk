@@ -10,10 +10,11 @@ import app.kabuk.service.SessionService
 /**
  * Kabuk's notification channels and the notification permission at targetSdk 28.
  *
- * Android 13+ asks a pre-33 app for POST_NOTIFICATIONS by itself, but only when the app makes its first channel
- * while one of its activities is in front. Channels made at process start (before any activity) never bring the
- * prompt, and on a fresh install notifications then stay off silently. So the channels are made from
- * [MainActivity] once it is on screen; the services make them lazily too (idempotent), for a start without the UI.
+ * A pre-33 app can't request POST_NOTIFICATIONS (the permission dialog closes at once, seen on API 35). Android 13+
+ * is documented to ask on its behalf when the app makes its first channel while one of its activities is in front,
+ * never for channels made at process start; so the channels are made from [MainActivity] once it is on screen (the
+ * services make them lazily too, idempotent). The API 35 emulator did not ask even then (B1, 2026-11-14), so
+ * MainActivity also offers the notification settings once while notifications are off.
  */
 object Notifications {
     @Volatile private var created = false

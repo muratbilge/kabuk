@@ -56,7 +56,8 @@ object TabManager {
     val current = MutableStateFlow<Long?>(null)
     val prompts = MutableStateFlow<List<Prompt>>(emptyList())
     /** short messages for the snackbar, optionally with one action (Undo, Reconnect) */
-    class Note(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null)
+    /** [sticky]: stays until you act on it or close it (for a note that is shown only once) */
+    class Note(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null, val sticky: Boolean = false)
     val toasts = MutableSharedFlow<Note>(extraBufferCapacity = 8)
     /** bumps whenever any tab's agent list changes (the UI re-reads [SshTab.agents]) */
     val agentsVersion = MutableStateFlow(0)
@@ -206,7 +207,9 @@ object TabManager {
     // ---- small shared services ----
 
     fun toast(msg: String) { toasts.tryEmit(Note(msg)) }
-    fun note(msg: String, action: String, onAction: () -> Unit) { toasts.tryEmit(Note(msg, action, onAction)) }
+    fun note(msg: String, action: String, sticky: Boolean = false, onAction: () -> Unit) {
+        toasts.tryEmit(Note(msg, action, onAction, sticky))
+    }
 
     /** closing from the tab's ×: an SSH tab can be brought back (tmux reattaches), so offer Undo */
     fun closeWithUndo(t: TermTab) {

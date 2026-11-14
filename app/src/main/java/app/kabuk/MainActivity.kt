@@ -98,9 +98,12 @@ class MainActivity : ComponentActivity() {
                 Snack.host.currentSnackbarData?.dismiss()
                 launch {
                     val r = Snack.host.showSnackbar(
-                        n.text, n.action,
-                        duration = if (n.action != null) androidx.compose.material3.SnackbarDuration.Long
-                                   else androidx.compose.material3.SnackbarDuration.Short,
+                        n.text, n.action, withDismissAction = n.sticky,
+                        duration = when {
+                            n.sticky -> androidx.compose.material3.SnackbarDuration.Indefinite
+                            n.action != null -> androidx.compose.material3.SnackbarDuration.Long
+                            else -> androidx.compose.material3.SnackbarDuration.Short
+                        },
                     )
                     if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
                         n.onAction?.invoke()
@@ -221,7 +224,7 @@ class MainActivity : ComponentActivity() {
         if (prefs.getBoolean("offered", false)) return
         prefs.edit().putBoolean("offered", true).apply()
         KLog.i("NOTIFY", "notifications off: offering the settings page once")
-        TabManager.note("Notifications are off for Kabuk", "Turn on") {
+        TabManager.note("Notifications are off for Kabuk", "Turn on", sticky = true) {
             runCatching {
                 startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
