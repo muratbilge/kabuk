@@ -330,3 +330,15 @@ green, commits [claude], REPORT-claude.md; no version bump/release/push.
 
 ### B8 released as 0.8.4 (40), 2026-11-15. Open: Ctrl-C/stop cuts all queued speech; usr/lib/libtermux-api.so still
 talks to the missing app; "+" menu hides "Phone (busybox)" while the install is damaged; nothing yet on hardware.
+
+### Phone result 0.8.4 (2026-11-15 00:26): apt hooks updated on the existing install, tts spoken x2, high-priority
+notification posted, vibrate -f 1000 ms. Pushed fa033b0. Murat chose: small leftovers next.
+
+### Brief: B9 — leftovers (release 0.8.5)
+1. termux-tts-speak: Ctrl-C / the cap stops only that request's speech, not other queued requests (e.g. one
+   TextToSpeech instance per request, or track utterance ids and re-queue the others after stop(); simplest correct).
+2. "+" menu: show "Phone (busybox)" also while the Termux install is damaged (and keep it when absent/installed as now).
+3. Emulator x86_64 mirror: if the first pkg update fails on one mirror (termux.librehat.com 404 seen), check whether
+   Termux's pkg already retries another; if a mirror in our default group is dead for both arches, drop it from the
+   chosen group (look at etc/termux/mirrors/europe); report only if nothing to change.
+Unit tests, emulator check for 1+2, docs + History 0.8.5, gate green, commits [claude], REPORT-claude.md; no bump/release/push.
