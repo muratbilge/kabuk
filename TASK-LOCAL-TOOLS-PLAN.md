@@ -193,3 +193,32 @@ Verify on the emulator: fresh install (prompt or note appears, screenshot), upgr
 foreground + its notification visible, Phone tab busybox ok, in-app updater code path (at least that
 PackageInstaller session install of a newer debug APK works from the app, if you can drive it; else say so),
 system bars dark. Gate green; docs/README History (0.8.0: "targetSdk 28, groundwork for Termux packages").
+
+### B1 released as 0.8.0 (36), 2026-11-14 (targetSdk 28, verified on the emulator incl. the in-app updater)
+
+### Brief: B2 — Termux packages installer (release 0.8.1)
+Productise the spike's bootstrap install (branch claude/termux, 0eeb425: `term/TermuxEnv.kt`, `StorageAccess.kt`,
+TermuxRelocatorTest; `git show 0eeb425`), on top of main (0.8.0, targetSdk 28). Include the relocation hook
+(`relocate-debs`) and the storage flow (`termux-setup-storage`, READ/WRITE_EXTERNAL_STORAGE,
+requestLegacyExternalStorage) since pkg is useless without them; B3 hardens, B4 adds am/wake-lock.
+1. **Consent, not auto-install.** First Phone-tab open after the update (and from a Phone-tab menu item "Install
+   Termux packages…" later): a sheet "Install Termux packages: ~33 MB download, ~100 MB on the phone; then `pkg
+   install` works like in Termux" [Install] [Not now]. Not now = busybox shell as today, asked again only from the
+   menu. While installing: determinate progress (download bytes, then extract/relocate count), cancellable;
+   failure/offline: message + Retry, busybox stays. Done: the next Phone tab (and a "Restart shell" offer for the
+   open one) starts Termux's login/bash; busybox stays reachable as a "Phone (busybox)" fallback entry for
+   recovery (e.g. a long-press menu or the Servers screen shell row).
+2. **Pin refresh:** `scripts/termux-bootstrap-pin.sh` prints the newest bootstrap tag + SHA-256 per arch from
+   github.com/termux/termux-packages releases, to update the constants; the app checks the SHA-256 before use.
+3. **Streaming install:** download to cacheDir, verify, extract + relocate entry by entry (no second full copy),
+   staging dir + atomic rename (as the spike), cleanup of partial state on failure/cancel; run on a background
+   thread/coroutine with the SessionService keeping the process alive.
+4. **Mirror:** default the pkg mirror to the Europe group (or a single reliable EU mirror) instead of a random
+   worldwide one; first `pkg update` after install happens in the new shell's motd/second stage, as Termux does.
+5. **Logs:** TERMUX tag, counts/sizes/durations/errors only (no file contents, no terminal text).
+6. **Tests:** relocator (binary same-length, text clean path, symlink targets, conffile md5 recompute), installer
+   state machine (consent/not now/progress/failure/retry/done) as JVM tests; emulator end to end on a fresh install
+   AND an upgrade from 0.8.0: consent sheet → install → bash → `pkg install python git` → run them; Not now path;
+   offline failure + retry (turn networking off in the emulator); storage flow.
+7. README Phone tab section (Termux packages, the arm64 note, sizes), docs/LOCAL-TOOLS.md phase B section,
+   History 0.8.1; licences note: packages are downloaded by the user from Termux's repositories, not shipped.
