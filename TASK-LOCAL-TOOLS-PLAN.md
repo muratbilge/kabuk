@@ -259,3 +259,43 @@ B4 (Termux app commands inside Kabuk):
 Emulator evidence per point; README/docs, History 0.8.2; gate green; commits [claude]; report as text.
 
 ### B3+B4 released as 0.8.2 (38), 2026-11-14 (fixes the 0.8.1 termux-setup-storage data-loss bug; Murat had never run it)
+
+### Phone result 0.8.2 (2026-11-14 22:17, CPH2449): installed, self-tests ok, no errors. Murat: `pkg update` ends
+"Kabuk: ready", `pkg install` works, `termux-setup-storage` (twice) + `~/storage/shared` fine; Play Protect only
+offered a scan (no harmful-app warning) on 0.8.0+. The Open-link chip offered https://termux.dev from the login motd.
+
+### Brief: B5+B6 — Termux:API commands and Phone-tab polish (release 0.8.3)
+B6 (Termux:API-like commands, the main part). Termux's `termux-api` package calls the separate Termux:API app
+(com.termux.api) via `am broadcast`; Kabuk has no such app. Instead provide Kabuk's own commands with the same
+names, arguments and output format (JSON where Termux:API prints JSON, same exit codes) through the existing
+kabuk-open request/answer channel ([KabukCommands]/[UrlOpener]; new names of libkabuk-open.so or small scripts
+in files/kabuk/bin that call it). files/kabuk/bin is first on PATH, so they win even if `pkg install termux-api`
+was run; make `termux-api`-package scripts that remain (unsupported ones) print "… is not supported in Kabuk".
+Commands, each with a unit test of parsing/output and an emulator check:
+1. `termux-clipboard-get` / `termux-clipboard-set [text]` (text from args or stdin; Android 10+ only lets the
+   foreground app read the clipboard: if Kabuk isn't focused, print a clear error, exit 1).
+2. `termux-toast [-s] [-g top|middle|bottom] [text|stdin]`, `termux-vibrate [-d ms] [-f]`,
+   `termux-torch on|off`, `termux-tts-speak [text|stdin]` (TextToSpeech, default engine).
+3. `termux-notification` (the common options: -t/--title, -c/--content or stdin, -i/--id, --ongoing, --priority,
+   --sound, --vibrate, --button1/--button1-action … at least --action and button actions run as shell commands in
+   a new Phone session or via `sh -c` in the prefix env — pick the simpler safe one and say which) and
+   `termux-notification-remove <id>`, `termux-notification-list` may be unsupported. Own channel "Scripts".
+4. `termux-share [-a send|view|edit] [-c content-type] [-d] [-t title] [file|stdin]` (FileProvider; stdin → text).
+5. `termux-battery-status` (JSON like Termux:API: health, percentage, plugged, status, temperature, current),
+   `termux-wifi-connectioninfo` (JSON; SSID needs location permission: report "<unknown ssid>" rather than asking),
+   `termux-volume [stream volume]`, `termux-media-scan [-r] path…`, `termux-download [-t title] [-d desc] url`
+   (DownloadManager), `termux-vibrate`, `termux-brightness <0-255|auto>` only if it needs no special permission
+   (WRITE_SETTINGS does: then unsupported with a clear message).
+6. Not in this step (print "not supported in Kabuk" + exit 1): sms, telephony call, camera-photo, microphone-record,
+   location, sensor, fingerprint, contacts, call-log, infrared, nfc, usb, wallpaper, dialog, storage-get, saf-*,
+   keystore, job-scheduler. List them in docs.
+B5 (Phone tab):
+7. Open-link chip: don't offer URLs from the login motd (/data/…/usr/etc/motd text, e.g. https://termux.dev,
+   community/wiki links) — simplest: ignore URLs printed before the first prompt of a session.
+8. Check that several Phone tabs at once work (each its own login shell; closing one doesn't kill the others) and
+   that "Phone (busybox)" stays the failsafe when usr is broken (rename usr/bin/login on the emulator to test).
+9. TERMUX_VERSION: keep 0.118.3 (scripts gate on it) and add KABUK_VERSION=<versionName> to the env.
+10. Logging: tag CMD with the command name only — never clipboard text, notification text, share contents, paths
+    or URLs (scheme+host at most).
+Emulator evidence per point; docs/LOCAL-TOOLS.md section + History entry 0.8.3 + Settings licences unchanged unless
+new code is added; gate green; commits [claude]; report as text (REPORT-claude.md). No version bump/release/push.
