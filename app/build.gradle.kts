@@ -5,8 +5,8 @@ plugins {
 }
 
 // Single source of the app version. Bump both on every release.
-val appVersionName = "0.8.0"
-val appVersionCode = 36
+val appVersionName = "0.8.1"
+val appVersionCode = 37
 
 base {
     archivesName.set("kabuk-$appVersionName")
