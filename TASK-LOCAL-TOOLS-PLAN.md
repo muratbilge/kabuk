@@ -136,3 +136,40 @@ Fix:
    `ping -c1 google.com` (→ /system/bin/ping, ok or at least not "bad address"/"are you root"), prompt shows `~ $`,
    TOOLS self-test lines ok, `which ping` → /system/bin/ping.
 5. README/docs (History 0.7.2), gate green, commits `[claude]`, report as text.
+
+## Phase B: Kabuk becomes Termux (Murat's decision, 2026-11-14: "i want all functions" → "Kabuk becomes Termux")
+Goal: Termux parity inside Kabuk's Phone tab: `pkg install` of the full Termux package collection (python, git,
+openssh, nodejs, clang …), bash, /sdcard access (termux-setup-storage), later Termux:API-like features. Requires
+targetSdk 28 (untrusted_app_27 SELinux domain may exec app_data_file; W^X applies from targetSdk 29).
+
+### Brief: B0 feasibility spike (worker: Opus) — no release, a report and a working prototype on a branch
+1. **targetSdk 28 audit of Kabuk** (read the code + Android behaviour changes 29..35): what changes or breaks when
+   targetSdk drops from 35 to 28 while compileSdk stays: SessionService (foregroundServiceType specialUse is a
+   targetSdk-34 rule: still fine?), POST_NOTIFICATIONS (33+: auto-granted/prompted differently), PendingIntent
+   mutability flags, package visibility (<queries>), background activity starts, scoped storage (28 = legacy
+   /sdcard access with READ/WRITE_EXTERNAL_STORAGE: good for termux-setup-storage), the in-app updater
+   (PackageInstaller session, REQUEST_INSTALL_PACKAGES), edge-to-edge/insets, Play Protect risk (secondbrain
+   stack/android.md has two Play Protect observations: read them), Android 16's minimum installable targetSdk.
+   Make the change on the branch (targetSdk 28) and fix what the audit finds, unit tests green.
+2. **Relocation spike (preferred design).** Termux's official packages hardcode `/data/data/com.termux/files/...`.
+   `com.termux` → `app.kabuk/` gives `/data/data/app.kabuk//files/...`, same byte length, valid path. Prototype:
+   - bootstrap: download Termux's official bootstrap zip for x86_64 (emulator) and aarch64 (phone) from
+     github.com/termux/termux-packages releases (pin + SHA-256), rewrite `/data/data/com.termux/` →
+     `/data/data/app.kabuk//` in every file (binary-safe, same length; ELF strings, RUNPATH, shebangs, scripts,
+     SYMLINKS.txt targets), install to filesDir/usr like Termux does (symlinks file, permissions), start
+     `usr/bin/login`/bash as the Phone tab's shell when present (busybox setup stays the fallback).
+   - apt: Termux's apt with a `DPkg::Pre-Install-Pkgs` hook (or an equivalent wrapper) that rewrites each
+     downloaded .deb before dpkg sees it: member paths `./data/data/com.termux/...` and file contents, same-length.
+     Also the dpkg/apt config paths in the bootstrap itself.
+   - prove on the emulator (targetSdk-28 debug build, docker emulator as before): bash starts; `pkg update`;
+     `pkg install python git openssh curl` succeed; `python3 -c 'import ssl,sqlite3;print(1)'`, `git --version`,
+     `curl -sI https://example.com`, `ssh -V` run; `./script.sh` runs directly (W^X gone at targetSdk 28);
+     `termux-setup-storage`-equivalent: /sdcard readable after granting storage (prototype the permission request).
+   - list what breaks under relocation (grep for leftover `com.termux` strings in installed files that aren't the
+     prefix: termux-am/intents to com.termux.*, compressed data, length-dependent checksums) and how bad it is.
+3. **Fallback assessment (don't build it):** effort to rebuild termux-packages with TERMUX_APP__PACKAGE_NAME=app.kabuk
+   (their docker builder), bootstrap + top packages, hosting an apt repo (GitHub releases/our relay), update cadence.
+4. Sizes (APK: the bootstrap is downloaded at first start or bundled? recommend), first-start UX (progress, offline).
+Report as text: verdict relocate-vs-rebuild with evidence, the audit table, what the prototype shows (commands +
+output), risks, and a step plan B1..Bn for the real implementation. Commits `[claude]` on branch claude/termux,
+gate green; no push/release/version bump.
