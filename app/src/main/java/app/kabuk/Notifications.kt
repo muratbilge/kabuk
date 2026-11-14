@@ -28,6 +28,7 @@ object Notifications {
             val fresh = nm.notificationChannels.isEmpty()
             AgentNotifier.createChannels(nm)
             SessionService.createChannel(nm)
+            app.kabuk.term.TermuxApi.createChannel(nm)
             created = true
             KLog.i("NOTIFY", "channels ${if (fresh) "created" else "present"}, notifications ${if (enabled(c)) "on" else "off"}")
             return fresh

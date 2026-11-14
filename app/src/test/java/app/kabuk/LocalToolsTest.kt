@@ -37,7 +37,8 @@ class LocalToolsTest {
         val bin = File(tmp.root, "bin")
         // a busybox that (hypothetically) had applets with these names must not take them
         BinDir(bin, lib) { listOf("ls", "rclone", "xdg-open", "open", "termux-open-url", "kabuk-open") }.sync("34 /x")
-        val opener = listOf("kabuk-open", "xdg-open", "open", "termux-open-url", "termux-open", "termux-wake-lock", "termux-wake-unlock")
+        val opener = listOf("kabuk-open", "xdg-open", "open", "termux-open-url", "termux-open", "termux-wake-lock", "termux-wake-unlock") +
+            app.kabuk.term.TermuxApi.NAMES
         assertEquals(setOf(".stamp", "busybox", "ls", "rclone") + opener, bin.list()!!.toSet())
         assertEquals(File(lib, "librclone.so").path, target(File(bin, "rclone")))
         opener.forEach { assertEquals(File(lib, "libkabuk-open.so").path, target(File(bin, it))) }

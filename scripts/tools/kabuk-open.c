@@ -8,10 +8,14 @@
  *   xdg-open, open, termux-open-url, kabuk-open <http(s) URL>
  *       -> <time>-<pid>.url (the URL); Kabuk opens it in the browser. No answer is awaited (rclone authorize
  *          runs it and goes on waiting for the redirect). xdg-open/open with anything else work like termux-open.
- *   am, termux-am, termux-open, termux-wake-lock, termux-wake-unlock, termux-reload-settings [args]
+ *   every other name (am, termux-am, termux-open, termux-wake-lock, termux-clipboard-get, termux-toast, ...)
  *       -> <time>-<pid>.req: "kabuk-req 1", the cwd, the command name and its arguments, each NUL-terminated.
- *          Kabuk (term/KabukCommands.kt) answers with <time>-<pid>.res: the exit code on the first line, then the
- *          text to print (stdout for 0, else stderr). No answer within 10 s: exit 1 with a message.
+ *          Kabuk (term/KabukCommands.kt, term/TermuxApi.kt) answers with <time>-<pid>.res: the exit code on the
+ *          first line, then the text to print (stdout for 0, else stderr). No answer within 10 s: exit 1.
+ *          A command that reads its input (termux-clipboard-set, termux-toast ... without a text argument) gets
+ *          "stdin" (always read, like cat) or "stdin-if-piped" (only when stdin is not a terminal) as the first
+ *          line instead: the program then hands its stdin over as <time>-<pid>.in (max 1 MiB) and waits for the
+ *          real answer the same way.
  *
  * Built by scripts/build-tools.sh. Apache-2.0, like Kabuk.
  */
@@ -25,15 +29,14 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "2"
+#define VERSION "3"
 #define MAX_URL 8192
 #define MAX_REQ 65536
-#define MAX_RES 16384
+#define MAX_RES (1 << 20)
+#define MAX_STDIN (1 << 20)
 #define WAIT_MS 10000
 
 static const char *URL_NAMES[] = {"xdg-open", "open", "termux-open-url", "kabuk-open", NULL};
-static const char *REQ_NAMES[] = {"am", "termux-am", "termux-open", "termux-wake-lock", "termux-wake-unlock",
-                                  "termux-reload-settings", NULL};
 
 static int in(const char *name, const char **list) {
     for (; *list; list++) if (strcmp(name, *list) == 0) return 1;
@@ -84,6 +87,8 @@ static int open_url(const char *name, const char *url) {
     return drop(name, dir, base, ".url", url, len);
 }
 
+static int await_answer(const char *name, const char *dir, const char *base);
+
 /* the request; then waits for Kabuk's answer and prints it */
 static int request(const char *name, int argc, char **argv) {
     const char *dir = open_dir(name);
@@ -100,9 +105,38 @@ static int request(const char *name, int argc, char **argv) {
     PUT(name);
     for (int i = 1; i < argc; i++) PUT(argv[i]);
 #undef PUT
-    char base[64], res[4096], req[4096];
+    char base[64];
     make_base(base, sizeof base);
     if (drop(name, dir, base, ".req", buf, len) != 0) return 1;
+    return await_answer(name, dir, base);
+}
+
+/* reads all of stdin (at most MAX_STDIN bytes) into a malloc'd buffer; -1 when it is longer */
+static ssize_t read_stdin(char **out) {
+    size_t cap = 65536, len = 0;
+    char *b = malloc(cap);
+    if (!b) return -1;
+    for (;;) {
+        if (len == cap) {
+            if (cap >= MAX_STDIN) { free(b); return -1; }
+            cap *= 2;
+            char *nb = realloc(b, cap);
+            if (!nb) { free(b); return -1; }
+            b = nb;
+        }
+        ssize_t r = read(0, b + len, cap - len);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        len += r;
+        if (len > MAX_STDIN) { free(b); return -1; }
+    }
+    *out = b;
+    return (ssize_t)len;
+}
+
+/* waits for <base>.res and prints it; hands stdin over first when Kabuk asks for it */
+static int await_answer(const char *name, const char *dir, const char *base) {
+    char res[4096], req[4096];
     snprintf(res, sizeof res, "%s/%s.res", dir, base);
     snprintf(req, sizeof req, "%s/%s.req", dir, base);
     struct timespec step = {0, 25 * 1000 * 1000};
@@ -115,6 +149,20 @@ static int request(const char *name, int argc, char **argv) {
             close(fd);
             unlink(res);
             out[n < 0 ? 0 : n] = 0;
+            if (strncmp(out, "stdin", 5) == 0) {
+                int if_piped = strncmp(out, "stdin-if-piped", 14) == 0;
+                char *input = NULL;
+                ssize_t len = 0;
+                if (!(if_piped && isatty(0))) {
+                    len = read_stdin(&input);
+                    if (len < 0) { fprintf(stderr, "%s: input too long (at most 1 MiB)\n", name); return 1; }
+                }
+                int failed = drop(name, dir, base, ".in", input ? input : "", (size_t)len);
+                free(input);
+                if (failed) return 1;
+                waited = 0;
+                continue;
+            }
             int code = atoi(out);
             char *text = strchr(out, '\n');
             if (text && text[1]) fputs(text + 1, code == 0 ? stdout : stderr);
@@ -130,9 +178,9 @@ static int request(const char *name, int argc, char **argv) {
 int main(int argc, char **argv) {
     const char *name = strrchr(argv[0], '/') ? strrchr(argv[0], '/') + 1 : argv[0];
     if (strncmp(name, "lib", 3) == 0) name = "kabuk-open"; /* run as libkabuk-open.so (the self-test) */
-    if (argc == 2 && strcmp(argv[1], "--version") == 0 && !in(name, REQ_NAMES)) { printf("kabuk-open " VERSION "\n"); return 0; }
-    if (in(name, REQ_NAMES)) return request(name, argc, argv);
-    if (!in(name, URL_NAMES)) { fprintf(stderr, "kabuk-open: unknown name %s\n", name); return 2; }
+    /* every other name is a request; Kabuk answers "unknown command" for names it doesn't know */
+    if (!in(name, URL_NAMES)) return request(name, argc, argv);
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("kabuk-open " VERSION "\n"); return 0; }
     int url_only = strcmp(name, "termux-open-url") == 0 || strcmp(name, "kabuk-open") == 0;
     /* termux-open-url <url> [app]: Termux's second argument (a package to open it with) is ignored */
     if (argc == 2 && is_http(argv[1])) return open_url(name, argv[1]);

@@ -15,14 +15,22 @@ import java.io.File
 
 /**
  * The Termux app's commands inside Kabuk: `am`/`termux-am`, `termux-open` (and `xdg-open <file>`),
- * `termux-wake-lock`/`termux-wake-unlock`, `termux-reload-settings`. They are names of libkabuk-open.so
- * (scripts/tools/kabuk-open.c), which drops a request into files/open; [UrlOpener]'s watcher hands it here and this
- * writes the answer the program prints. [parse] is pure (KabukCommandsTest); [execute] does it on the main thread.
+ * `termux-wake-lock`/`termux-wake-unlock`, `termux-reload-settings`, and Termux:API's ([TermuxApi]). They are names
+ * of libkabuk-open.so (scripts/tools/kabuk-open.c), which drops a request into files/open; [UrlOpener]'s watcher
+ * hands it here and this writes the answer the program prints. A command that reads its input asks for it first
+ * ([Action.NeedStdin]: the program then hands its stdin over as `<base>.in`, [handleStdin]).
+ * [parse] is pure (KabukCommandsTest, TermuxApiTest); [execute] does it on the main thread.
  * Logs (tag CMD): the command and the intent's action / the URI's scheme + host, never full URIs, paths or extras.
  */
 object KabukCommands {
     private const val TAG = "CMD"
     private const val MAX_REQ = 65536
+    /** what kabuk-open hands over at most from stdin (MAX_STDIN in kabuk-open.c) */
+    private const val MAX_STDIN = 1 shl 20
+
+    /** The names [parse] answers (each is a link to libkabuk-open.so in files/kabuk/bin). */
+    val NAMES = listOf("am", "termux-am", "termux-open", "termux-wake-lock", "termux-wake-unlock", "termux-reload-settings") +
+        TermuxApi.NAMES
 
     /** What a request asks for. */
     sealed class Action {
@@ -34,6 +42,10 @@ object KabukCommands {
         data class Broadcast(val intent: IntentSpec) : Action()
         /** print [text], exit [code] (help, version, errors) */
         data class Reply(val code: Int, val text: String) : Action()
+        /** a Termux:API command ([TermuxApi]) */
+        data class Api(val req: TermuxApi.Req) : Action()
+        /** the command needs the program's stdin (only when it isn't a terminal: [onlyIfPiped]); parse again with it */
+        data class NeedStdin(val onlyIfPiped: Boolean) : Action()
     }
 
     /** An intent as `am` describes it. */
@@ -73,8 +85,8 @@ Open a file or URL in an external app.
         return Triple(parts[1], parts[2], parts.subList(3, parts.size - 1))
     }
 
-    /** What [name] with [args], run in [cwd], asks for. */
-    fun parse(name: String, args: List<String>, cwd: String): Action = when (name) {
+    /** What [name] with [args], run in [cwd], asks for; [stdin]: the program's input, once handed over. */
+    fun parse(name: String, args: List<String>, cwd: String, stdin: String? = null): Action = when (name) {
         "termux-wake-lock", "termux-wake-unlock" ->
             if (args.isNotEmpty()) Action.Reply(1, "usage: $name\n")
             else Action.WakeLock(name == "termux-wake-lock")
@@ -83,7 +95,7 @@ Open a file or URL in an external app.
             else Action.ReloadSettings
         "termux-open" -> parseOpen(args, cwd)
         "am", "termux-am" -> parseAm(name, args, cwd)
-        else -> Action.Reply(2, "kabuk: unknown command $name\n")
+        else -> TermuxApi.parse(name, args, cwd, stdin) ?: Action.Reply(2, "kabuk: unknown command $name\n")
     }
 
     private fun parseOpen(args: List<String>, cwd: String): Action {
@@ -231,6 +243,10 @@ Open a file or URL in an external app.
 
     // ---- on the phone ----
 
+    /** Requests waiting for their stdin (base name → request), dropped after an hour (the program may wait on a tty). */
+    private class Pending(val cwd: String, val name: String, val args: List<String>, val at: Long)
+    private val pending = HashMap<String, Pending>()
+
     /** From the watcher thread: read + delete the request, run it on the main thread, write the answer. */
     fun handle(dir: File, f: File) {
         val bytes = runCatching { if (f.length() > MAX_REQ) null else f.readBytes() }.getOrNull()
@@ -239,23 +255,67 @@ Open a file or URL in an external app.
         val req = bytes?.let(::decode)
         if (req == null) { answer(dir, base, Answer(2, "kabuk: unreadable request\n")); return }
         val (cwd, name, args) = req
+        TabManager.main.post { run(dir, base, cwd, name, args, null) }
+    }
+
+    /** From the watcher thread: the stdin a request asked for (`<base>.in`). */
+    fun handleStdin(dir: File, f: File) {
+        val bytes = runCatching { if (f.length() > MAX_STDIN) null else f.readBytes() }.getOrNull()
+        f.delete()
+        val base = f.name.removeSuffix(".in")
         TabManager.main.post {
-            val a = runCatching { execute(TabManager.app, name, parse(name, args, cwd)) }
-                .getOrElse { e -> KLog.w(TAG, "$name failed", e); Answer(1, "$name: ${e.javaClass.simpleName}: ${e.message}\n") }
-            Thread({ answer(dir, base, a) }, "cmd-answer").start()
+            val p = pending.remove(base)
+            when {
+                p == null -> answerLater(dir, base, Answer(2, "kabuk: input for an unknown request\n"))
+                bytes == null -> answerLater(dir, base, Answer(1, "${p.name}: input too long or unreadable\n"))
+                else -> run(dir, base, p.cwd, p.name, p.args, String(bytes, Charsets.UTF_8))
+            }
         }
     }
 
-    private fun answer(dir: File, base: String, a: Answer) {
+    /** Main thread. */
+    private fun run(dir: File, base: String, cwd: String, name: String, args: List<String>, stdin: String?) {
+        val action = runCatching { parse(name, args, cwd, stdin) }
+            .getOrElse { e -> KLog.w(TAG, "$name: parse failed", e); Action.Reply(1, "$name: ${e.javaClass.simpleName}\n") }
+        if (action is Action.NeedStdin) {
+            val now = System.currentTimeMillis()
+            pending.entries.removeAll { now - it.value.at > 3_600_000 }
+            if (pending.size >= 64) pending.remove(pending.minByOrNull { it.value.at }!!.key)
+            pending[base] = Pending(cwd, name, args, now)
+            answerLater(dir, base, null, if (action.onlyIfPiped) "stdin-if-piped" else "stdin")
+            return
+        }
+        val reply = { a: Answer -> answerLater(dir, base, a) }
+        val failed = { e: Throwable -> KLog.w(TAG, "$name failed", e); Answer(1, "$name: ${e.javaClass.simpleName}: ${e.message}\n") }
+        if (action is Action.Api) {
+            val r = action.req
+            // walking a tree can take a while: not on the main thread
+            if (r is TermuxApi.Req.MediaScan) {
+                Thread({ reply(runCatching { TermuxApi.mediaScan(TabManager.app, name, r) }.getOrElse(failed)) }, "cmd-media-scan").start()
+                return
+            }
+            runCatching { TermuxApi.execute(TabManager.app, name, r, reply) }.onFailure { reply(failed(it)) }
+            return
+        }
+        reply(runCatching { execute(TabManager.app, name, action) }.getOrElse(failed))
+    }
+
+    private fun answerLater(dir: File, base: String, a: Answer?, raw: String? = null) =
+        Thread({ if (raw != null) write(dir, base, raw) else answer(dir, base, a!!) }, "cmd-answer").start()
+
+    private fun answer(dir: File, base: String, a: Answer) = write(dir, base, "${a.code}\n${a.text}")
+
+    private fun write(dir: File, base: String, text: String) {
         runCatching {
             val tmp = File(dir, ".$base.res.tmp")
-            tmp.writeText("${a.code}\n${a.text}")
+            tmp.writeText(text)
             tmp.renameTo(File(dir, "$base.res"))
         }.onFailure { KLog.w(TAG, "could not answer a command: ${it.javaClass.simpleName}") }
     }
 
-    /** Main thread. */
+    /** Main thread. ([Action.Api] and [Action.NeedStdin] are handled by [run].) */
     internal fun execute(ctx: Context, name: String, action: Action): Answer = when (action) {
+        is Action.Api, is Action.NeedStdin -> error("handled by run")
         is Action.Reply -> {
             if (action.code != 0) KLog.i(TAG, "$name: refused or bad usage (exit ${action.code})")
             Answer(action.code, action.text)
@@ -279,7 +339,7 @@ Open a file or URL in an external app.
         }
     }
 
-    private fun startActivity(ctx: Context, name: String, i: Intent, spec: IntentSpec?, label: String? = null): Answer {
+    internal fun startActivity(ctx: Context, name: String, i: Intent, spec: IntentSpec?, label: String? = null): Answer {
         val what = spec?.let(::describe) ?: label.orEmpty()
         if (!TabManager.foreground) {
             // Android blocks activity starts from the background: offer it for when the user comes back
@@ -388,7 +448,7 @@ Open a file or URL in an external app.
      * /data/data/<pkg>/files is mapped onto filesDir first: on Android 15 /data/user/0 and /data/data are separate
      * mounts, so the provider's canonical-path check would refuse it as written.
      */
-    private fun contentUri(ctx: Context, f: File): Uri? {
+    internal fun contentUri(ctx: Context, f: File): Uri? {
         val canon = f.canonicalFile
         val dataFiles = "/data/data/${ctx.packageName}/files/"
         @Suppress("DEPRECATION") val shared = Environment.getExternalStorageDirectory().canonicalFile
