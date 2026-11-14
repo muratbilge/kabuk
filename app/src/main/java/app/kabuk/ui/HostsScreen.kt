@@ -298,7 +298,7 @@ fun SwitchRow(title: String, checked: Boolean, subtitle: String? = null, onChang
 
 /**
  * "Phone shell": tap opens a Phone tab (Termux's bash once installed, else busybox); long-press (or ⋮) offers the
- * busybox shell for recovery and "Install Termux packages…".
+ * busybox shell for recovery and "Repair Termux packages…" (installed or damaged).
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -336,7 +336,7 @@ private fun PhoneShellRow(onConnected: () -> Unit) {
             }
         }
         androidx.compose.material3.DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            if (installed && !state.running) {
+            if ((installed || broken) && !state.running) {
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text("Phone (busybox)") },
                     onClick = { menu = false; TabManager.openLocal(busybox = true); onConnected() },

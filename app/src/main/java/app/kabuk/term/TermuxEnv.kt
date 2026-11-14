@@ -50,6 +50,12 @@ object TermuxEnv {
 
     internal fun usable(prefix: File) = File(prefix, "bin/login").isFile && File(prefix, "bin/bash").isFile
     internal fun broken(prefix: File) = prefix.isDirectory && !usable(prefix)
+    /**
+     * New-tab menus offer "Phone (busybox)" next to "Phone shell" when usr is there, installed or damaged (plain
+     * "Phone shell" on a damaged install brings up the Repair sheet); not when absent (that already is busybox).
+     */
+    fun offersBusyboxTab(ctx: Context) = offersBusyboxTab(prefix(ctx))
+    internal fun offersBusyboxTab(prefix: File) = usable(prefix) || broken(prefix)
     fun zipFile(ctx: Context, arch: String) = File(File(ctx.cacheDir, "termux"), "bootstrap-$arch.zip")
 
     /**

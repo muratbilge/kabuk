@@ -327,7 +327,7 @@ private fun TabStrip(
                     )
                 }
                 DropdownMenuItem(text = { Text("Phone shell") }, onClick = { newMenu = false; TabManager.openLocal() })
-                if (app.kabuk.term.TermuxInstaller.installed(ctx)) DropdownMenuItem(
+                if (app.kabuk.term.TermuxEnv.offersBusyboxTab(ctx)) DropdownMenuItem(
                     text = { Text("Phone (busybox)") }, onClick = { newMenu = false; TabManager.openLocal(busybox = true) },
                 )
                 HorizontalDivider()

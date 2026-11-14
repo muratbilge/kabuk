@@ -530,13 +530,61 @@ object TermuxApi {
     private val ttsWaiting = mutableListOf<() -> Unit>()
     private val utterance = AtomicInteger()
 
-    /** One termux-tts-speak: answered when its last piece was spoken (or at the first error). Main thread. */
-    private class SpeechJob(val name: String, val chars: Int, var left: Int, val done: (Answer) -> Unit) {
+    /**
+     * One termux-tts-speak: answered when its last piece was spoken (or at the first error). Main thread. [voice]
+     * and [pitch]/[rate]/[params] are what its pieces are spoken with, also when they are queued again.
+     */
+    private class SpeechJob(
+        val name: String, val chars: Int, var left: Int, val done: (Answer) -> Unit,
+        val voice: android.speech.tts.Voice?, val pitch: Float, val rate: Float, val params: Bundle,
+    ) {
         var answered = false
-        fun finish(a: Answer) { if (!answered) { answered = true; done(a) } }
+        /** the engine began one of its pieces (onStart): the speech cap counts from here */
+        var started = false
+        var cap: Runnable? = null
+        fun finish(a: Answer) {
+            if (answered) return
+            answered = true
+            cap?.let { TabManager.main.removeCallbacks(it) }
+            done(a)
+        }
     }
-    /** utterance id → its job */
-    private val speaking = HashMap<String, SpeechJob>()
+
+    /**
+     * What Kabuk has handed to the engine and not yet heard back about, in speaking order (utterance id → job and
+     * text). TextToSpeech can only stop everything it has queued, so cancelling one request [cancel]s its pieces
+     * and gives back the others' pieces, which the caller queues again after stop() (a piece that was being spoken
+     * starts over). Ids it no longer knows (the stopped ones' onStop) are ignored. Main thread.
+     */
+    internal class SpeechQueue<J : Any> {
+        class Piece<J>(val job: J, val text: String)
+        private val queued = LinkedHashMap<String, Piece<J>>()
+        fun add(id: String, job: J, text: String) { queued[id] = Piece(job, text) }
+        /** [id] was spoken or failed: its job, null if it is not (or no longer) queued */
+        fun take(id: String): J? = queued.remove(id)?.job
+        fun jobOf(id: String): J? = queued[id]?.job
+        /** the job whose piece the engine speaks now (or next) */
+        fun head(): J? = queued.values.firstOrNull()?.job
+        fun has(job: J) = queued.values.any { it.job === job }
+        fun jobs(): Set<J> = queued.values.mapTo(LinkedHashSet()) { it.job }
+        fun ids(): List<String> = queued.keys.toList()
+        fun clear() = queued.clear()
+        /** forgets [job]'s pieces without touching the others (what the engine already has may still be spoken) */
+        fun drop(job: J) { queued.values.removeAll { it.job === job } }
+        /**
+         * Drops [job]'s pieces. null when it had none queued (nothing to stop); else the other jobs' pieces in
+         * order, which leave the queue too: the caller stops the engine and queues them again with new ids.
+         */
+        fun cancel(job: J): List<Piece<J>>? {
+            if (!has(job)) return null
+            val rest = queued.values.filter { it.job !== job }
+            queued.clear()
+            return rest
+        }
+    }
+    private val speaking = SpeechQueue<SpeechJob>()
+    /** tests: the utterance ids Kabuk waits for, in order */
+    internal fun speakingIds(): List<String> = speaking.ids()
 
     /**
      * How long a termux-tts-speak may take before Kabuk gives up (engine stuck): 30 s + 150 ms per character of
@@ -544,15 +592,45 @@ object TermuxApi {
      */
     internal fun speechCapMs(chars: Int): Long = (30_000L + 150L * chars).coerceAtMost(600_000L)
 
-    /** Main thread: drops [job]'s queued pieces and stops the engine's speech (it stops other queued text too). */
-    private fun abandon(job: SpeechJob) {
-        val had = speaking.entries.removeAll { it.value === job }
-        if (had) tts?.stop()
+    /** Main thread: queues [text] for [job] with its voice and settings; false when the engine refused it. */
+    private fun send(t: TextToSpeech, job: SpeechJob, text: String, settings: Boolean): Boolean {
+        if (settings) {
+            job.voice?.let { runCatching { t.setVoice(it) } }
+            t.setPitch(job.pitch)
+            t.setSpeechRate(job.rate)
+        }
+        val id = "kabuk-${utterance.incrementAndGet()}"
+        speaking.add(id, job, text)
+        if (t.speak(text, TextToSpeech.QUEUE_ADD, job.params, id) == TextToSpeech.SUCCESS) return true
+        speaking.take(id)
+        return false
     }
 
-    /** Main thread: the program of the request answered through [done] is gone (Ctrl-C): stop its speech. */
+    /**
+     * Main thread: drops [job]'s queued pieces. The engine can only stop all of its speech, so the other requests'
+     * pieces are queued again right after (in their order; one being spoken starts over).
+     */
+    private fun abandon(job: SpeechJob) {
+        val rest = speaking.cancel(job) ?: return
+        val t = tts ?: return
+        t.stop()
+        var last: SpeechJob? = null
+        val failed = LinkedHashSet<SpeechJob>()
+        for (p in rest) {
+            if (p.job in failed) continue
+            if (!send(t, p.job, p.text, settings = p.job !== last)) failed += p.job
+            last = p.job
+        }
+        if (rest.isNotEmpty()) KLog.i(TAG, "speech of ${rest.map { it.job }.toSet().size} other request(s) queued again")
+        for (j in failed) {
+            speaking.drop(j)
+            j.finish(fail(j.name, "speak failed", "the text-to-speech engine refused the text"))
+        }
+    }
+
+    /** Main thread: the program of the request answered through [done] is gone (Ctrl-C): stop its speech only. */
     fun cancelSpeech(done: (Answer) -> Unit) {
-        val job = speaking.values.firstOrNull { it.done === done } ?: return
+        val job = speaking.jobs().firstOrNull { it.done === done } ?: return
         abandon(job)
         if (!job.answered) KLog.i(TAG, "${job.name}: speech stopped (the program ended)")
         job.finish(Answer(1, "${job.name}: interrupted\n"))
@@ -577,7 +655,7 @@ object TermuxApi {
     }
 
     private val progress = object : UtteranceProgressListener() {
-        override fun onStart(utteranceId: String?) {}
+        override fun onStart(utteranceId: String?) { TabManager.main.post { started(utteranceId) } }
         override fun onDone(utteranceId: String?) { TabManager.main.post { piece(utteranceId, null) } }
         @Deprecated("API 21", ReplaceWith("onError(utteranceId, errorCode)"))
         override fun onError(utteranceId: String?) { TabManager.main.post { piece(utteranceId, "the text-to-speech engine could not speak the text") } }
@@ -587,11 +665,39 @@ object TermuxApi {
         override fun onStop(utteranceId: String?, interrupted: Boolean) { TabManager.main.post { piece(utteranceId, "speech was stopped") } }
     }
 
-    /** Main thread: one piece is spoken ([error] null) or failed. */
+    /**
+     * Main thread: the speech cap of [job], from now. It counts from the job's first spoken piece ([started]), so a
+     * request waiting behind another one's long text is not given up on; when it fires while the job still waits
+     * and the engine is busy with another request that did start, it waits another round. A stuck engine starts
+     * nothing, so then the cap ends the job at the head of the queue, and after it the next one.
+     */
+    private fun armCap(job: SpeechJob) {
+        job.cap?.let { TabManager.main.removeCallbacks(it) }
+        val r = Runnable {
+            if (job.answered) return@Runnable
+            val head = speaking.head()
+            if (!job.started && head != null && head !== job && head.started) { armCap(job); return@Runnable }
+            abandon(job)
+            KLog.w(TAG, "${job.name}: speech did not finish within ${speechCapMs(job.chars) / 1000} s, stopped")
+            job.finish(Answer(1, "${job.name}: speech did not finish (engine stuck?)\n"))
+        }
+        job.cap = r
+        TabManager.main.postDelayed(r, speechCapMs(job.chars))
+    }
+
+    /** Main thread: the engine began piece [id]; the first piece of a request restarts its cap. */
+    private fun started(id: String?) {
+        val job = speaking.jobOf(id ?: return) ?: return
+        if (job.started) return
+        job.started = true
+        if (!job.answered) armCap(job)
+    }
+
+    /** Main thread: one piece is spoken ([error] null) or failed (the rest of its request is dropped). */
     private fun piece(id: String?, error: String?) {
-        val job = speaking.remove(id ?: return) ?: return
+        val job = speaking.take(id ?: return) ?: return
         if (error != null) {
-            speaking.entries.removeAll { it.value === job }
+            abandon(job)
             if (!job.answered) KLog.w(TAG, "${job.name}: ${error.substringBefore(" (")}")
             job.finish(Answer(1, "${job.name}: $error\n"))
         } else if (--job.left == 0) {
@@ -607,23 +713,18 @@ object TermuxApi {
                 val loc = Locale(req.language, req.region.orEmpty(), req.variant.orEmpty())
                 if (t.setLanguage(loc) < TextToSpeech.LANG_AVAILABLE) KLog.w(TAG, "$name: language not available")
             }
-            t.setPitch(req.pitch)
-            t.setSpeechRate(req.rate)
             val params = Bundle().apply { putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, req.stream) }
             val pieces = speechPieces(req.text, runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000))
             if (pieces.isEmpty()) return@say done(ok(name, "nothing to say"))
-            val job = SpeechJob(name, req.text.length, pieces.size, done)
-            TabManager.main.postDelayed({
-                if (job.answered) return@postDelayed
-                abandon(job)
-                KLog.w(TAG, "$name: speech did not finish within ${speechCapMs(job.chars) / 1000} s, stopped")
-                job.finish(Answer(1, "$name: speech did not finish (engine stuck?)\n"))
-            }, speechCapMs(req.text.length))
+            // the voice in effect now (this request's -l, else what the engine uses): kept for a re-queue
+            val voice = runCatching { t.voice }.getOrNull()
+            val job = SpeechJob(name, req.text.length, pieces.size, done, voice, req.pitch, req.rate, params)
+            armCap(job)
+            t.setPitch(req.pitch)
+            t.setSpeechRate(req.rate)
             for (p in pieces) {
-                val id = "kabuk-${utterance.incrementAndGet()}"
-                speaking[id] = job
-                if (t.speak(p, TextToSpeech.QUEUE_ADD, params, id) != TextToSpeech.SUCCESS) {
-                    speaking.entries.removeAll { it.value === job }
+                if (!send(t, job, p, settings = false)) {
+                    abandon(job)
                     return@say job.finish(fail(name, "speak failed", "the text-to-speech engine refused the text"))
                 }
             }
@@ -633,7 +734,7 @@ object TermuxApi {
             return
         }
         // another engine: what the old one still had queued is cut off
-        speaking.values.toSet().forEach { it.finish(Answer(1, "${it.name}: interrupted (another termux-tts-speak switched the engine)\n")) }
+        speaking.jobs().forEach { it.finish(Answer(1, "${it.name}: interrupted (another termux-tts-speak switched the engine)\n")) }
         speaking.clear()
         tts?.shutdown()
         ttsReady = false

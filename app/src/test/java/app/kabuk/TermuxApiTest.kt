@@ -254,6 +254,105 @@ class TermuxApiTest {
         assertEquals(long, pieces.joinToString(" "))
     }
 
+    /** Cancelling one request drops only its pieces; the others leave too, to be queued again after stop(). */
+    @Test fun speechQueueCancel() {
+        val q = TermuxApi.SpeechQueue<String>()
+        q.add("1", "a", "a1"); q.add("2", "b", "b1"); q.add("3", "a", "a2"); q.add("4", "b", "b2")
+        assertEquals(null, q.cancel("c"))
+        val rest = q.cancel("a")!!
+        assertEquals(listOf("b1", "b2"), rest.map { it.text })
+        assertEquals(listOf("b", "b"), rest.map { it.job })
+        assertEquals("queue empty until the caller re-adds", emptyList<String>(), q.ids())
+        assertEquals("a stopped id's onStop is ignored", null, q.take("1"))
+        q.add("5", "b", "b1"); q.add("6", "b", "b2")
+        assertEquals("b", q.take("5"))
+        assertEquals(emptyList<String>(), q.cancel("b"))
+        q.add("7", "x", "x1"); q.add("8", "y", "y1"); q.drop("x")
+        assertEquals(listOf("8"), q.ids())
+    }
+
+    /**
+     * Two termux-tts-speak at once, the first one stopped (Ctrl-C): the engine is stopped, the second one's text is
+     * queued again and the second request is answered 0 once spoken; the first is answered "interrupted".
+     */
+    @Test fun ctrlCStopsOnlyItsOwnSpeech() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val answers = mutableMapOf<String, KabukCommands.Answer>()
+        val first = { a: KabukCommands.Answer -> answers["first"] = a }
+        val second = { a: KabukCommands.Answer -> answers["second"] = a }
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("one\ntwo", null, null, null, null, 1f, 1f, 3), first)
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("three", null, null, null, null, 1.5f, 1f, 3), second)
+        val tts = org.robolectric.shadows.ShadowTextToSpeech.getLastTextToSpeechInstance()
+        val shadow = org.robolectric.shadow.api.Shadow.extract<org.robolectric.shadows.ShadowTextToSpeech>(tts)
+        shadow.onInitListener.onInit(android.speech.tts.TextToSpeech.SUCCESS)
+        // the init task speaks; the shadow then posts onStart/onDone itself: unhook them, the test says what is spoken
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).runOneTask()
+        val l = shadow.utteranceProgressListener
+        tts.setOnUtteranceProgressListener(null)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertEquals(listOf("one", "two", "three"), shadow.spokenTextList)
+        val before = TermuxApi.speakingIds()
+        assertEquals("answers=$answers", 3, before.size)
+
+        TermuxApi.cancelSpeech(first)
+        // (the shadow's isStopped is reset by the re-queue's speak(); checked below with nothing to re-queue)
+        assertEquals(1, answers.getValue("first").code)
+        assertEquals(listOf("one", "two", "three", "three"), shadow.spokenTextList)
+        val after = TermuxApi.speakingIds()
+        assertEquals(1, after.size)
+        assertTrue("a new id for the re-queued piece", after[0] !in before)
+        assertEquals(false, "second" in answers)
+
+        // the stopped utterances report onStop: ignored; the re-queued one is spoken
+        before.forEach { l.onStop(it, true) }
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertEquals(false, "second" in answers)
+        l.onDone(after[0])
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertEquals(0, answers.getValue("second").code)
+        assertEquals(emptyList<String>(), TermuxApi.speakingIds())
+
+        // alone in the queue: stopped, nothing queued again
+        val third = { a: KabukCommands.Answer -> answers["third"] = a }
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("four", null, null, null, null, 1f, 1f, 3), third)
+        assertEquals(1, TermuxApi.speakingIds().size)
+        TermuxApi.cancelSpeech(third)
+        assertTrue(shadow.isStopped)
+        assertEquals(listOf("one", "two", "three", "three", "four"), shadow.spokenTextList)
+        assertEquals(1, answers.getValue("third").code)
+        assertEquals(emptyList<String>(), TermuxApi.speakingIds())
+
+        // the cap counts from a request's first spoken piece: one waiting behind a long text is not given up on
+        val looper = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+        val long = { a: KabukCommands.Answer -> answers["long"] = a }
+        val wait = { a: KabukCommands.Answer -> answers["wait"] = a }
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("x".repeat(400), null, null, null, null, 1f, 1f, 3), long)
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("short", null, null, null, null, 1f, 1f, 3), wait)
+        val (idLong, idWait) = TermuxApi.speakingIds()
+        l.onStart(idLong)
+        looper.idleFor(java.time.Duration.ofSeconds(60))
+        assertEquals("short's cap (30.75 s) passed while long is spoken", false, "wait" in answers)
+        l.onDone(idLong)
+        looper.idle()
+        assertEquals(0, answers.getValue("long").code)
+        l.onStart(idWait)
+        looper.idleFor(java.time.Duration.ofSeconds(25))
+        assertEquals(false, "wait" in answers)
+        looper.idleFor(java.time.Duration.ofSeconds(10))
+        assertEquals("capped 30.75 s after it started", 1, answers.getValue("wait").code)
+        assertEquals(emptyList<String>(), TermuxApi.speakingIds())
+
+        // a stuck engine (nothing starts): both requests end at their caps
+        val s1 = { a: KabukCommands.Answer -> answers["s1"] = a }
+        val s2 = { a: KabukCommands.Answer -> answers["s2"] = a }
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("a", null, null, null, null, 1f, 1f, 3), s1)
+        TermuxApi.execute(ctx, "termux-tts-speak", Req.Speak("b", null, null, null, null, 1f, 1f, 3), s2)
+        looper.idleFor(java.time.Duration.ofSeconds(31))
+        assertEquals(1, answers.getValue("s1").code)
+        assertEquals(1, answers.getValue("s2").code)
+        assertEquals(emptyList<String>(), TermuxApi.speakingIds())
+    }
+
     /** termux-api's full-path scripts: the sync script as written, and when the tab start has to run it. */
     @Test fun termuxApiSyncScript() {
         val s = TermuxEnv.termuxApiSync("/data/data/app.kabuk/files/usr", "/data/data/app.kabuk/files/kabuk/bin")

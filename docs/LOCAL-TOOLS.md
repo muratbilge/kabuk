@@ -476,8 +476,8 @@ the engine line by line, long lines cut at a space below `getMaxSpeechInputLengt
 → exit 1; switching the engine with `-e` ends the old engine's pending requests with exit 1). Speech has its own
 cap: after 30 s + 150 ms per character (at most 10 min) Kabuk stops the engine (`tts.stop()`) and answers exit 1
 "termux-tts-speak: speech did not finish (engine stuck?)"; Ctrl-C (the keep-alive finds the program gone) stops the
-speech too. `tts.stop()` also cuts other queued termux-tts-speak text (those answer exit 1). The cap and Ctrl-C stop
-are unit-tested (formula) but were added after the emulator run below. *Verified* with eSpeak
+speech too. (0.8.4: `tts.stop()` also cut other queued termux-tts-speak text; fixed in 0.8.5, see below.) The cap
+and Ctrl-C stop are unit-tested (formula) but were added after the emulator run below. *Verified* with eSpeak
 NG (F-Droid, installed only into the throwaway emulator):
 - `termux-tts-speak hello from kabuk` → 1.2 s, rc 0, log "spoken (16 chars)"; 540 chars at `-r 0.8` → 39 s, rc 0
   (keep-alives held it past 10 s), `files/open` empty afterwards; three piped lines with a blank one → rc 0.
@@ -500,4 +500,47 @@ missing"), its Repair button → repaired, Restart shell → bash with Termux's 
 **Logs.** New lines: `CMD termux-tts-speak: spoken (N chars)`, `… the program ended before the answer (Ctrl-C?)`,
 `TERMUX apt hooks updated`, `TERMUX termux-api package synced at tab start (…)`, `TERMUX offering a repair: …`.
 No test text (notification titles/content, spoken text) in any `Kabuk.*` line of the emulator's logcat.
+
+## Leftovers (0.8.5)
+
+*Verified* on the emulator (android-35 x86_64 in docker, debug build with the tools, eSpeak NG from F-Droid only in
+the throwaway emulator, 2026-11-15) unless marked otherwise. Evidence: `~/.cache/kabuk-tools/b9-shots/`
+(`b9-1a..d.txt`, `b9-2a..d.txt`, `p2*.png`).
+
+**Stopping one termux-tts-speak leaves the others.** TextToSpeech can only stop everything it has queued. Kabuk keeps
+its own list of the pieces it handed to the engine (`TermuxApi.SpeechQueue`, utterance id → request and text, in
+order). When one request ends early (Ctrl-C, its cap, an engine error), its pieces leave the list, the engine is
+stopped and the other requests' pieces are queued again at once with new ids, each with its request's voice, pitch,
+rate and stream (the stopped ids' late `onStop` is ignored). A piece that was being spoken for another request
+starts over (pieces are lines, so that is one line). The speech cap (30 s + 150 ms per character) now counts from
+the request's first spoken piece (`onStart`): a request waiting behind another one's long text is no longer given up
+on. A stuck engine starts nothing; then the cap ends the request at the head of the queue, and the next one after it.
+Robolectric test `TermuxApiTest.ctrlCStopsOnlyItsOwnSpeech` (re-queue, ignored onStop, cap from start, stuck engine).
+*Verified*:
+- A = 456 chars at `-r 0.8` speaking, B = short queued 1 s later, SIGTERM to A after 6 s → A rc 143, B rc 0 after
+  11 s; log "speech of 1 other request(s) queued again", "speech stopped (the program ended)", "spoken (28 chars)".
+- B = 8 lines speaking, A = short waiting behind it, SIGTERM to A → B rc 0 (all 264 chars spoken).
+- A = 456 chars at `-r 0.8`, B = short (cap 34 s) queued behind, nothing killed → A rc 0 after 35 s, B rc 0 after
+  37 s. With the 0.8.4 cap the same run ended B with "speech did not finish (engine stuck?)" after 35 s, and its
+  stop restarted A's text (A took 71 s).
+- In the Phone tab: `sh long.sh` (termux-tts-speak at `-r 0.4`), B queued from a script, the key bar's ^C → the tab's
+  program ends, B rc 0 after 6 s.
+
+**"Phone (busybox)" in the "+" menu while the install is damaged.** `TermuxEnv.offersBusyboxTab`: usr installed or
+damaged (not absent, where "Phone shell" already is busybox). The Servers screen's ⋮ for "Phone shell" now also
+offers "Phone (busybox)" and "Repair Termux packages…" for a damaged install (0.8.4 showed an empty menu there,
+though the row said "⋮ → Repair"). *Verified*: no usr → "+" shows Phone shell, Servers…; `usr/bin` without login/bash
+→ "+" adds "Phone (busybox)", which opens a busybox tab (`/proc/<pid>/exe` → libbusybox.so,
+`SHELL=…/files/bin/sh`) without the Repair sheet; Servers ⋮ shows both entries; "+" → Phone shell still brings the
+"Termux packages are damaged" sheet; placeholder login + bash → "+" keeps "Phone (busybox)".
+
+**Mirrors (no change).** pkg (termux-tools 1.45.0 in the pinned bootstrap) tests every mirror of the chosen group
+with `curl --fail <mirror>/dists/stable/Release` in parallel before each update and picks only among the ones that
+answer, so a mirror that is down for both arches is skipped by pkg itself. It does not retry another mirror when
+`apt update` then fails. Checked from DevBox (2026-11-15) for all 23 mirrors of `europe` (InRelease, then the
+first bytes of `main/binary-{x86_64,aarch64}/Packages.gz`): 15 serve both arches; 8 do not answer at all (4 have no
+DNS name, the others time out or fail TLS), which pkg's test drops; `termux.librehat.com` answers Release and
+aarch64 but returns 404 for `binary-x86_64`, which pkg's test does not catch: on x86_64 (emulator) a pick of it
+fails the update (rerun `pkg update` picks again). No mirror is dead for both arches in a way pkg misses, so the group
+stays as is.
 
