@@ -222,3 +222,10 @@ requestLegacyExternalStorage) since pkg is useless without them; B3 hardens, B4 
    offline failure + retry (turn networking off in the emulator); storage flow.
 7. README Phone tab section (Termux packages, the arm64 note, sizes), docs/LOCAL-TOOLS.md phase B section,
    History 0.8.1; licences note: packages are downloaded by the user from Termux's repositories, not shipped.
+
+### B2 released as 0.8.1 (37), 2026-11-14. Notes for B3 from review/report:
+- `prefix.deleteRecursively()` / staging cleanup use Kotlin deleteRecursively, which follows symlinks to dirs:
+  before any reinstall/repair action, switch to a non-following delete (Files.walkFileTree without FOLLOW_LINKS).
+- No reinstall/repair menu yet (recovery = "Phone (busybox)"); process kill mid-install leaves usr-staging (cleaned
+  on next use, untested); conffile prompts on `pkg upgrade` untested on device; "Open link" chip offers mirror URLs
+  during the first pkg update (noisy); first pkg update tests ~23 EU mirrors (~20 s).
