@@ -37,7 +37,7 @@ class TermuxPropertiesTest {
         assertEquals(5, r.applied.size)
         val text = r.describe()
         assertTrue(text, text.contains("terminal-transcript-rows=20000"))
-        assertTrue(text, text.contains("Phone tabs only"))
+        assertFalse(text, text.contains("Phone tabs only"))  // the long help only when no settings file exists
         assertFalse(text, text.contains("extra-keys are ignored"))
     }
 

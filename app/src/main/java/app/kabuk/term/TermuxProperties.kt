@@ -30,7 +30,7 @@ object TermuxProperties {
             if (applied.isNotEmpty()) append("Applied: ${applied.joinToString(", ")}\n")
             errors.forEach { append("Not applied: $it\n") }
             if (ignored.isNotEmpty()) append("Ignored (not supported in Kabuk): ${ignored.joinToString(", ")}\n")
-            append(help)
+            if (!found) append(help)
         }
     }
 

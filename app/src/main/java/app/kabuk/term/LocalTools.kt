@@ -22,7 +22,8 @@ object LocalTools {
     val ALIASES = mapOf("xdg-open" to "kabuk-open", "open" to "kabuk-open", "termux-open-url" to "kabuk-open",
         // Termux app + Termux:API commands (term/KabukCommands.kt, TermuxApi.kt); not `am`, /system/bin/am stays
         // reachable in busybox's shell
-        "termux-open" to "kabuk-open", "termux-wake-lock" to "kabuk-open", "termux-wake-unlock" to "kabuk-open") +
+        "termux-open" to "kabuk-open", "termux-wake-lock" to "kabuk-open", "termux-wake-unlock" to "kabuk-open",
+        "termux-reload-settings" to "kabuk-open") +
         TermuxApi.NAMES.associateWith { "kabuk-open" }
     /**
      * busybox applets never linked because Android's own /system/bin version works for an app and busybox's does not:
@@ -154,7 +155,7 @@ internal class BinDir(
          * Part of the stamp: bumped when what gets linked changes (2: [LocalTools.PREFER_SYSTEM] left out, 3: termux-*
          * names, 4: Termux:API names).
          */
-        const val LAYOUT = 4
+        const val LAYOUT = 5
     }
 
     private val stampFile get() = File(bin, ".stamp")
