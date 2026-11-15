@@ -146,8 +146,8 @@ Termux's collection, with bash as the shell.
   notification says "wake lock on"), `termux-open <file|url>` and `xdg-open <file>` (files go to other apps as a
   content:// URI; `--send`, `--chooser`, `--content-type`), `am start|broadcast` (a common subset: `-a -d -t -c -n
   -f --es --ez --ei --el --ef --eu --esa`; anything else says "not supported in Kabuk"), `termux-reload-settings`
-  (`~/.termux/termux.properties`: `terminal-transcript-rows`, `bell-character`, `volume-keys`; extra-keys and the
-  rest are listed as ignored), `termux-info` (Kabuk's details).
+  (`~/.termux/termux.properties`: Phone-only scrollback, bell, volume keys, extra keys with popups/macros,
+  cursor style/blink, black chrome and keyboard startup; also `colors.properties` and `font.ttf`, live on reload), `termux-info` (Kabuk's details).
 - **Termux:API commands** (0.8.3), built in (no Termux:API app): `termux-clipboard-get`/`-set`, `termux-toast`,
   `termux-vibrate`, `termux-torch`, `termux-tts-speak`, `termux-notification` (title, content, id, ongoing, sound,
   vibrate, up to three buttons; `--action`/button actions run as shell commands in the background) and
@@ -232,6 +232,9 @@ offer in `app/src/main/assets/licenses/`, shown in Settings → Licences), rclon
 the notices of its Go modules in the same place).
 
 ## History
+
+- **Unreleased — B11.** Phone tabs read ~/.termux key layouts, colors, font and cursor settings at start and on
+  `termux-reload-settings`; SSH tabs retain Kabuk settings.
 
 - **0.8.5 — leftovers.** Ctrl-C on one `termux-tts-speak` (or giving up on a stuck one) stops only that text; other
   queued speech goes on, and a request waiting behind a long text is no longer cut off. "+" offers "Phone (busybox)"

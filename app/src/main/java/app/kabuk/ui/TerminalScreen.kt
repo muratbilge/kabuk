@@ -161,6 +161,8 @@ fun TerminalScreen(
     val currentId by TabManager.current.collectAsState()
     val tab = tabs.firstOrNull { it.id == currentId } ?: tabs.firstOrNull()
     LaunchedEffect(tab) { ui.view.tab = tab }
+    val phoneSettings = (tab as? LocalTab)?.properties
+    LaunchedEffect(tab, phoneSettings) { ui.view.applyPhoneSettings() }
     // look for a choice menu (approval prompts) a few times a second
     LaunchedEffect(tab) {
         if (ui.autoDetect) ui.choices = emptyList()
@@ -234,8 +236,11 @@ fun TerminalScreen(
             }
         }
         KeyBar(
-            ui.mods, tab?.id, onAction = { a -> keyAction(ui, a, onTextMode) }, promptOpen = ui.showPrompt,
-            choices = ui.choices, onChoice = ui::answer,
+            ui.mods, tab?.id, onAction = { a ->
+                if (a == KeyAction.Drawer) onOpenHosts() else keyAction(ui, a, onTextMode, onOpenHosts)
+            }, promptOpen = ui.showPrompt,
+            keys = phoneSettings?.keys ?: defaultKeys, black = phoneSettings?.black == true,
+            choices = if (phoneSettings?.keys != null) emptyList() else ui.choices, onChoice = ui::answer,
         )
         if (ui.showPrompt) PromptBox(ui)
     }
@@ -264,19 +269,44 @@ private fun OpenLinkChip(url: String, ui: TerminalUi, modifier: Modifier) {
     }
 }
 
-fun keyAction(ui: TerminalUi, a: KeyAction, onTextMode: (TermTab) -> Unit) {
+fun keyAction(ui: TerminalUi, a: KeyAction, onTextMode: (TermTab) -> Unit, onDrawer: () -> Unit = {}) {
     val v = ui.view
     val tab = ui.target
     when (a) {
         is KeyAction.Code -> v.sendKeyCode(a.keyCode, 0)
         is KeyAction.Text -> a.s.codePoints().forEach { v.inputCodePoint(it, false, false) }
         is KeyAction.Raw -> { v.scrollToBottom(); tab?.write(a.s) }
+        is KeyAction.Sequence -> {
+            val saved = listOf(ui.mods.ctrl, ui.mods.alt, ui.mods.shift, ui.mods.fnKey)
+            ui.mods.ctrl = Mod.OFF; ui.mods.alt = Mod.OFF; ui.mods.shift = Mod.OFF; ui.mods.fnKey = Mod.OFF
+            try {
+                a.actions.forEach { part ->
+                    when (part) {
+                        KeyAction.Ctrl -> ui.mods.ctrl = Mod.LOCKED
+                        KeyAction.Alt -> ui.mods.alt = Mod.LOCKED
+                        KeyAction.Shift -> ui.mods.shift = Mod.LOCKED
+                        KeyAction.Fn -> ui.mods.fnKey = Mod.LOCKED
+                        else -> {
+                            keyAction(ui, part, onTextMode, onDrawer)
+                            ui.mods.ctrl = Mod.OFF; ui.mods.alt = Mod.OFF; ui.mods.shift = Mod.OFF; ui.mods.fnKey = Mod.OFF
+                        }
+                    }
+                }
+            } finally {
+                ui.mods.ctrl = saved[0]; ui.mods.alt = saved[1]; ui.mods.shift = saved[2]; ui.mods.fnKey = saved[3]
+            }
+        }
+        KeyAction.Drawer -> onDrawer()
+        KeyAction.Fn -> ui.mods.tap(3)
         KeyAction.Ctrl -> ui.mods.tap(0)
         KeyAction.Alt -> ui.mods.tap(1)
         KeyAction.Shift -> ui.mods.tap(2)
         KeyAction.Paste -> v.paste()
         KeyAction.PromptBox -> ui.showPrompt = !ui.showPrompt
-        KeyAction.Keyboard -> v.showKeyboard()
+        KeyAction.Keyboard -> {
+            if (androidx.core.view.ViewCompat.getRootWindowInsets(v)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true) v.hideKeyboard()
+            else v.showKeyboard()
+        }
         KeyAction.TextMode -> tab?.let(onTextMode)
         KeyAction.Replies -> {}
         KeyAction.Snippets -> ui.showQuick = true
@@ -308,7 +338,7 @@ private fun TabStrip(
         if (i >= 0) listState.animateScrollToItem(i)
     }
     // slim: every dp here is terminal space
-    Row(Modifier.fillMaxWidth().background(Surface1).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().background(if ((current as? LocalTab)?.properties?.black == true) Color.Black else Surface1).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
         LazyRow(
             state = listState, modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
