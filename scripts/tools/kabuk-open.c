@@ -16,6 +16,12 @@
  *          a big media scan) Kabuk creates <time>-<pid>.wait every few seconds; the program removes it and starts
  *          its 10 s again. A separate file, so it can never race with the answer. Ctrl-C ends the wait as usual.
  *          ("kabuk-req 1", versions 2-3, gets no keep-alives.)
+ *          "kabuk-req 3" (version 5) also says the program takes streamed output: a command that prints as it goes
+ *          (termux-location -r updates, termux-sensor) has Kabuk write <time>-<pid>.o1, .o2, ... (temp name +
+ *          rename, in order); the program prints each to stdout as it appears, deletes it and starts its 10 s
+ *          again. Kabuk writes all of them before the .res, and the program looks for the next one before the
+ *          .res, so nothing is lost or reordered. Ctrl-C (or a closed pipe) ends the program; Kabuk notices
+ *          through its keep-alive check and stops the stream. ("kabuk-req 2" gets only the first piece as answer.)
  *          A command that reads its input (termux-clipboard-set, termux-toast ... without a text argument) gets
  *          "stdin" (always read, like cat) or "stdin-if-piped" (only when stdin is not a terminal) as the first
  *          line instead: the program then hands its stdin over as <time>-<pid>.in (max 1 MiB) and waits for the
@@ -33,7 +39,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "4"
+#define VERSION "5"
 #define MAX_URL 8192
 #define MAX_REQ 65536
 #define MAX_RES (1 << 20)
@@ -104,7 +110,7 @@ static int request(const char *name, int argc, char **argv) {
 #define PUT(s) do { size_t l_ = strlen(s) + 1; \
         if (len + l_ > sizeof buf) { fprintf(stderr, "%s: arguments too long\n", name); return 1; } \
         memcpy(buf + len, s, l_); len += l_; } while (0)
-    PUT("kabuk-req 2");
+    PUT("kabuk-req 3");
     PUT(cwd);
     PUT(name);
     for (int i = 1; i < argc; i++) PUT(argv[i]);
@@ -140,12 +146,27 @@ static ssize_t read_stdin(char **out) {
 
 /* waits for <base>.res and prints it; hands stdin over first when Kabuk asks for it */
 static int await_answer(const char *name, const char *dir, const char *base) {
-    char res[4096], req[4096], alive[4096];
+    char res[4096], req[4096], alive[4096], chunk[4096];
+    unsigned long next = 1;
     snprintf(res, sizeof res, "%s/%s.res", dir, base);
     snprintf(req, sizeof req, "%s/%s.req", dir, base);
     snprintf(alive, sizeof alive, "%s/%s.wait", dir, base);
     struct timespec step = {0, 25 * 1000 * 1000};
     for (int waited = 0; waited < WAIT_MS; waited += 25) {
+        /* streamed output first: every piece is written before the answer */
+        snprintf(chunk, sizeof chunk, "%s/%s.o%lu", dir, base, next);
+        int cfd = open(chunk, O_RDONLY | O_CLOEXEC);
+        if (cfd >= 0) {
+            static char piece[MAX_RES];
+            ssize_t r;
+            while ((r = read(cfd, piece, sizeof piece)) > 0) fwrite(piece, 1, (size_t)r, stdout);
+            close(cfd);
+            unlink(chunk);
+            fflush(stdout);
+            next++;
+            waited = 0;
+            continue;
+        }
         int fd = open(res, O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
             static char out[MAX_RES + 1];

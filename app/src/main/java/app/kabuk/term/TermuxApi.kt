@@ -69,29 +69,29 @@ object TermuxApi {
         "termux-clipboard-get", "termux-clipboard-set", "termux-toast", "termux-vibrate", "termux-torch",
         "termux-tts-speak", "termux-notification", "termux-notification-remove", "termux-share",
         "termux-battery-status", "termux-wifi-connectioninfo", "termux-volume", "termux-media-scan", "termux-download",
-    )
+    ) + TermuxDevices.NAMES
+
+    private const val SAF = "the storage access framework (termux-storage-get copies one picked file)"
 
     /** termux-api's other commands: "… is not supported in Kabuk", exit 1 (docs/LOCAL-TOOLS.md lists them). */
     val UNSUPPORTED = mapOf(
         "termux-sms-send" to "SMS", "termux-sms-list" to "SMS", "termux-sms-inbox" to "SMS",
         "termux-telephony-call" to "phone calls", "termux-telephony-cellinfo" to "telephony",
-        "termux-telephony-deviceinfo" to "telephony", "termux-camera-photo" to "the camera",
-        "termux-camera-info" to "the camera", "termux-microphone-record" to "the microphone",
-        "termux-location" to "location", "termux-sensor" to "sensors", "termux-fingerprint" to "the fingerprint sensor",
+        "termux-telephony-deviceinfo" to "telephony", "termux-fingerprint" to "the fingerprint sensor",
         "termux-contact-list" to "contacts", "termux-call-log" to "the call log",
         "termux-infrared-frequencies" to "infrared", "termux-infrared-transmit" to "infrared", "termux-nfc" to "NFC",
-        "termux-usb" to "USB devices", "termux-wallpaper" to "the wallpaper", "termux-dialog" to "dialogs",
-        "termux-storage-get" to "the file picker", "termux-saf-create" to "the storage access framework",
-        "termux-saf-dirs" to "the storage access framework", "termux-saf-ls" to "the storage access framework",
-        "termux-saf-managedir" to "the storage access framework", "termux-saf-mkdir" to "the storage access framework",
-        "termux-saf-read" to "the storage access framework", "termux-saf-rm" to "the storage access framework",
-        "termux-saf-stat" to "the storage access framework", "termux-saf-write" to "the storage access framework",
+        "termux-usb" to "USB devices", "termux-wallpaper" to "the wallpaper",
+        "termux-saf-create" to SAF,
+        "termux-saf-dirs" to SAF, "termux-saf-ls" to SAF,
+        "termux-saf-managedir" to SAF, "termux-saf-mkdir" to SAF,
+        "termux-saf-read" to SAF, "termux-saf-rm" to SAF,
+        "termux-saf-stat" to SAF, "termux-saf-write" to SAF,
         "termux-keystore" to "the keystore", "termux-job-scheduler" to "the job scheduler",
         "termux-notification-list" to "reading notifications (needs notification access)",
         "termux-notification-channel" to "own notification channels (Kabuk posts to its \"Scripts\" channels; --priority high picks \"Scripts (important)\")",
         "termux-brightness" to "changing the brightness (needs the special \"modify system settings\" permission)",
         "termux-wifi-scaninfo" to "Wi-Fi scans (needs location)", "termux-wifi-enable" to "switching Wi-Fi",
-        "termux-media-player" to "the media player", "termux-speech-to-text" to "speech recognition",
+        "termux-speech-to-text" to "speech recognition",
         "termux-tts-engines" to "listing TTS engines", "termux-audio-info" to "audio info",
         "termux-api-start" to "the Termux:API service", "termux-api-stop" to "the Termux:API service",
     )
@@ -192,6 +192,7 @@ object TermuxApi {
         UNSUPPORTED[name]?.let { what ->
             return Action.Reply(1, "$name: $what $NOT_IN_KABUK (there is no Termux:API app; see termux-info for what works)\n")
         }
+        TermuxDevices.parse(name, args, cwd)?.let { return it }
         return when (name) {
             "termux-clipboard-get" -> when {
                 args.any { it == "-h" } -> usage(CLIP_GET_USAGE)
@@ -349,7 +350,7 @@ object TermuxApi {
     internal fun jsonArray(items: List<List<Pair<String, Any?>>>): String =
         if (items.isEmpty()) "[]" else items.joinToString(",\n", "[\n", "\n]") { "  " + json(it, "  ") }
 
-    private fun value(v: Any?): String = when (v) {
+    internal fun value(v: Any?): String = when (v) {
         null -> "null"
         is String -> quote(v)
         is Boolean, is Int, is Long -> v.toString()

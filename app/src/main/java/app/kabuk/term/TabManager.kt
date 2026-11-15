@@ -102,11 +102,17 @@ object TabManager {
     }
 
     /** Main thread. Keeps [SessionService] running with no tab open (the Termux install runs in the background). */
-    fun keepAlive(on: Boolean) {
-        keepAlive = on
+    fun keepAlive(on: Boolean) = hold("install", on)
+
+    /**
+     * Main thread. Keeps [SessionService] (and so the process) running with no tab open while any [reason] holds:
+     * the Termux install, a microphone recording, a playing track.
+     */
+    fun hold(reason: String, on: Boolean) {
+        if (if (on) !holds.add(reason) else !holds.remove(reason)) return
         tabsChanged()
     }
-    private var keepAlive = false
+    private val holds = HashSet<String>()
 
     internal fun add(t: TermTab): TermTab {
         if (t is SshTab) logStatus(t)
@@ -162,7 +168,7 @@ object TabManager {
 
     private fun tabsChanged() {
         val i = Intent(app, SessionService::class.java)
-        if (_tabs.value.isEmpty() && !keepAlive) app.stopService(i)
+        if (_tabs.value.isEmpty() && holds.isEmpty()) app.stopService(i)
         else runCatching {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i) else app.startService(i)
         }.onFailure { toast("Couldn't start the background service: sessions may drop when the app is closed") }

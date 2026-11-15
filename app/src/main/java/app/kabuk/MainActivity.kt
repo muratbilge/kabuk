@@ -149,6 +149,9 @@ class MainActivity : ComponentActivity() {
                         Snack.host, Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
                     )
                     prompts.firstOrNull()?.let { PromptDialog(it) }
+                    // termux-dialog from a Phone tab's program (term/TermuxDevices.kt)
+                    val scriptDialogs by app.kabuk.term.TermuxDevices.dialogs.collectAsState()
+                    scriptDialogs.firstOrNull()?.let { androidx.compose.runtime.key(it) { app.kabuk.ui.ScriptDialog(it) } }
                     app.kabuk.ui.TermuxSheet(onOpenTerminal = { screen = Screen.Terminal })
                     ui.link?.let { LinkDialog(it) { ui.link = null } }
                 }

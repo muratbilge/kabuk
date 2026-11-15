@@ -405,7 +405,8 @@ inbox, telephony-call/cellinfo/deviceinfo, camera-photo/info, microphone-record,
 contact-list, call-log, infrared-frequencies/transmit, nfc, usb, wallpaper, dialog, storage-get, saf-* (create,
 dirs, ls, managedir, mkdir, read, rm, stat, write), keystore, job-scheduler, notification-list (needs notification
 access), notification-channel, brightness (needs WRITE_SETTINGS, a special permission), wifi-scaninfo,
-wifi-enable, media-player, speech-to-text, tts-engines, audio-info, api-start/api-stop. (0.8.3: calling the
+wifi-enable, media-player, speech-to-text, tts-engines, audio-info, api-start/api-stop. (0.8.6 implements
+camera-photo/info, microphone-record, location, sensor, dialog, storage-get and media-player, see below.) (0.8.3: calling the
 package's own `$PREFIX/libexec/termux-api` or `usr/bin/termux-*` by full path still hung; fixed in 0.8.4, below.)
 
 **"Open link" chip and the login message.** `LocalTab` records the transcript at the first keystroke
@@ -543,4 +544,65 @@ DNS name, the others time out or fail TLS), which pkg's test drops; `termux.libr
 aarch64 but returns 404 for `binary-x86_64`, which pkg's test does not catch: on x86_64 (emulator) a pick of it
 fails the update (rerun `pkg update` picks again). No mirror is dead for both arches in a way pkg misses, so the group
 stays as is.
+
+## Termux:API commands with permissions (0.8.6, `term/TermuxDevices.kt`)
+
+*Verified* on the emulator (android-35 x86_64 in docker, debug build with the tools and `-Pkabuk.logsinkToken=`,
+2026-11-15) unless marked otherwise. Evidence: `~/.cache/kabuk-tools/b10-shots/` (`b10-*.txt`, `p*.png`,
+`p3-photo.jpg`). Commands ran as the app through busybox sh (`run-as app.kabuk files/bin/env -i … files/bin/sh -c`,
+the same request channel as the Phone tab) and, for Ctrl-C, in the Phone tab itself.
+
+**Permissions.** `ACCESS_FINE_LOCATION`/`ACCESS_COARSE_LOCATION`, `CAMERA` and `RECORD_AUDIO` are in the manifest
+(as `uses-feature required=false`), asked only when a command needs one: `ApiActivity` (transparent, not exported)
+calls `requestPermissions` and hands the outcome back; the program waits through kabuk-open's keep-alive. Refused →
+"permission denied: Kabuk may not use the … (allow it in Android settings → Apps → Kabuk → Permissions)", exit 1.
+Kabuk in the background → no prompt (Android would block the activity start): "Kabuk needs the … permission, and
+Android asks only while Kabuk is on screen: switch to Kabuk and run it again", exit 1. Once granted, the commands
+also work from the background, except location (below). With location granted, `termux-wifi-connectioninfo` now
+shows the real SSID (Android ties it to location; it still never asks for it).
+
+**Streamed output (kabuk-open 5).** The program sends `kabuk-req 3`. A command that prints as it goes has Kabuk
+write `<base>.o1`, `.o2` … (temp name + rename, in order); kabuk-open prints each to stdout as it appears, deletes it
+and restarts its 10 s timer; the `.res` comes after the last piece and the program looks for the next piece before
+the `.res`, so nothing is lost or reordered. At most 64 unread pieces (a stopped program, Ctrl-Z): newer ones are
+dropped until it reads again. Ctrl-C or a closed pipe (`| head -2`) ends the program; Kabuk's keep-alive check
+finds it gone within 3 s, deletes the unread pieces and stops the source (location updates, sensors). Older programs
+(`kabuk-req 2`/`1`) still work: a streaming command answers with its first piece. *Verified*: unit test
+`TermuxDevicesTest.streamedOutput`; on DevBox a host build of kabuk-open against a fake Kabuk (2 pieces, 12 s of
+keep-alives, a third piece, the answer: all printed in order, rc 0 after 12 s); on the emulator a kabuk-open 4 binary
+(kabuk-open.c of c911594, built with the NDK) against this build: `termux-sensor -s light` printed one reading, rc 0.
+
+| Command | Kabuk does | Emulator check |
+|---|---|---|
+| `termux-location [-p gps\|network\|passive] [-r once\|last\|updates] [-d ms]` | JSON like Termux:API (latitude … provider; `API_ERROR` for no last location); `once` waits up to 60 s (requestLocationUpdates, not requestSingleUpdate, which Android 12+ cuts at 30 s); `updates`: one compact JSON object per line every `-d` ms (default 5000) until Ctrl-C (Termux:API prints a JSON array and stops after 30 s); a disabled provider says so | prompt → Don't allow → denied, rc 1 (75 s wait held by keep-alives); background without permission → the "switch to Kabuk" message; `once` 1.5 s, `last`, `updates -d 1000` three lines then Ctrl-C/`head -2` → "stopped (the program ended, 3 updates)" |
+| `termux-dialog [widget] [-t title] [-i hint] [-m] [-n] [-p] [-v a,b] [-r min,max,start] [-d format]` | Compose dialog over whatever Kabuk shows (`ui/ScriptDialog.kt`), only while Kabuk is on screen; Termux:API's JSON: `code` -1 OK/Yes, -2 Cancel/No/dismissed, 0 a sheet item; `text`, `index` (radio/spinner/sheet), `values` (checkbox); the script's option checks and messages; `speech` unsupported | every widget: confirm Yes, text typed + OK, password + Cancel, checkbox two of three (`\,` in a value), radio, spinner, sheet, counter `-r 1,5,4` + twice → 5, date with/without `-d`, time, Back → -2; Ctrl-C closes the dialog; background → "Kabuk must be on screen", rc 1 |
+| `termux-camera-info` | JSON array like Termux:API (id, facing, jpeg_output_sizes, focal_lengths, auto_exposure_modes, physical_size, capabilities); no permission | the AVD's camera "1" (back) |
+| `termux-camera-photo [-c id] file` | Camera2 without UI: half a second of preview on a dummy surface for AE/AF, then one JPEG at the largest size, orientation from sensor + screen; no `-c`: camera 0, else the first back camera (the AVD has only "1"); parent dir must exist; 20 s limit | prompt → Don't allow → denied; While using → `p.jpg` 1856x1392 JPEG (the emulated scene); `-c 7` → "no camera with id 7"; `/nonexistent/x.jpg` → no such directory; from the background → taken, rc 0 |
+| `termux-sensor -l \| -s a,b \| -a [-d ms] [-n count] \| -c` | `-l` `{"sensors": [...]}`; `-s`: per part the shortest name containing it, case ignored (as Termux:API); readings every `-d` ms (default 1000) as Termux:API's JSONObject (whole numbers without `.0`), streamed until Ctrl-C or `-n`; `-c` "Sensor cleanup unnecessary" (Kabuk unregisters when the program ends); no permission | `-l` 18 sensors; `-s accel,light -d 500 -n 2` → two readings, rc 0, 1.1 s; `-a` 3 s → 2 × 18 readings; in the Phone tab `-n 3`, then `-d 700` + key bar ^C → rc 130, "stopped (the program ended, 12 readings)" |
+| `termux-storage-get file` | ACTION_OPEN_DOCUMENT through `ApiActivity`, copied to `file` off the main thread; answers when copied (Termux:API returns at once); nothing chosen → exit 1 "no file was chosen"; only while Kabuk is on screen | picker → Downloads → `pick-me.txt` → `got.txt` with its content; Back → rc 1, no file; background → refused |
+| `termux-microphone-record -f file [-l s] [-e aac\|amr_wb\|amr_nb\|opus] [-b kbps] [-r Hz] [-c n] \| -d \| -i \| -q` | MediaRecorder in the app process, Termux:API's messages (`Recording started: … Max Duration: 15:00`, `{"isRecording": …}`, `Recording finished: …`, "already exists", "already in progress"); default file `/sdcard/KabukAudioRecording_<time>.m4a` (needs `termux-setup-storage`); while recording the session notification reads "Recording audio (termux-microphone-record)" with a "Stop recording" button, and the session service stays up with no tab open (`TabManager.hold`) | prompt → While using → recording, `-i` JSON, second start → "already in progress"; `-q` from the background → 35 KB m4a (17 s); `-l 2` ends by itself (log "limit reached"); `-e amr_wb` stopped with the notification's button (screenshot `p6-recording-notification.png`). The emulator runs `-no-audio`: content not checked |
+| `termux-media-player play [file] \| pause \| stop \| info` | MediaPlayer, Termux:API's messages (`Now Playing:`, `Status: … Current Position: 00:01 / 00:17`, …) | played the recording back: play, info, pause, resume, stop, info, missing file → "is not a file!", rc 1 |
+
+**Location in the background.** Android hands an app in the background a location only with "Allow all the time"
+(ACCESS_BACKGROUND_LOCATION); Kabuk's session service (specialUse) does not count as a location service. Without it,
+`termux-location` from the background answers at once: "Android gives Kabuk the location only while it is on
+screen: switch to Kabuk, or allow "All the time" in Android settings → Apps → Kabuk → Permissions → Location for
+scripts in the background", exit 1 (Termux:API asks for the same permission). *Verified*: with only "while using"
+the old code waited 60 s for nothing (`dumpsys location`: Kabuk registered, 0 locations); with
+`pm grant … ACCESS_BACKGROUND_LOCATION` once/updates from the background work. `-r updates` started in front stops
+receiving fixes when Kabuk goes to the background without "All the time" (not handled further).
+`adb emu geo fix` did not reach the docker emulator's GNSS (`last location=null`); the location checks used a test
+provider (`appops set com.android.shell android:mock_location allow`, `cmd location providers add-test-provider gps`,
+`set-test-provider-location gps --location …`).
+
+**Still not supported** (exit 1, "… is not supported in Kabuk"): sms-*, telephony-*, contact-list, call-log (no SMS/
+phone/contacts permissions: Play Protect flags them), fingerprint, infrared-*, nfc, usb, wallpaper, saf-* (the
+message points to termux-storage-get), keystore, job-scheduler, notification-list/-channel, brightness, wifi-scaninfo,
+wifi-enable, speech-to-text, tts-engines, audio-info, api-start/-stop; `termux-dialog speech`.
+
+**Logs.** Tag `CMD`: the command and the outcome only (`termux-location: once (fix from gps)`, `termux-dialog:
+checkbox answered`, `termux-camera-photo: photo taken (1856x1392, 58349 bytes)`, `termux-storage-get: copied (26
+bytes)`, `termux-microphone-record: recording ended (limit reached)`, `… asking for the camera permission` /
+`… permission refused`). No coordinates, dialog answers, file names or paths: *verified* by grepping the emulator's
+`Kabuk.*` logcat for the test coordinates, typed text and file names (no hits).
 

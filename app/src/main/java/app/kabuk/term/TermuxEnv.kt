@@ -488,8 +488,10 @@ object TermuxEnv {
         |echo "  termux-wake-unlock, termux-reload-settings, termux-setup-storage."
         |echo "Termux:API commands in Kabuk (no Termux:API app needed): termux-clipboard-get/-set, termux-toast,"
         |echo "  termux-vibrate, termux-torch, termux-tts-speak, termux-notification(-remove), termux-share,"
-        |echo "  termux-battery-status, termux-wifi-connectioninfo, termux-volume, termux-media-scan, termux-download."
-        |echo "  The others (sms, camera, location, sensors, dialogs, ...) say they are not supported. No plugins."
+        |echo "  termux-battery-status, termux-wifi-connectioninfo, termux-volume, termux-media-scan, termux-download,"
+        |echo "  termux-location, termux-dialog, termux-camera-info/-photo, termux-sensor, termux-storage-get,"
+        |echo "  termux-microphone-record, termux-media-player (permissions are asked while Kabuk is on screen)."
+        |echo "  The others (sms, telephony, contacts, call log, saf, ...) say they are not supported. No plugins."
         |""".trimMargin()
 
     /**

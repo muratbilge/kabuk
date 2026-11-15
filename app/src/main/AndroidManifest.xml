@@ -7,6 +7,15 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- termux-wifi-connectioninfo (a normal permission: granted at install; the SSID itself needs location, not asked) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Termux:API commands that need a permission (term/TermuxDevices.kt); asked only when such a command runs and
+         Kabuk is on screen: termux-location, termux-camera-photo, termux-microphone-record -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -47,6 +56,13 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+
+        <!-- Termux:API commands: the permission prompt and termux-storage-get's file picker (term/ApiActivity.kt) -->
+        <activity
+            android:name=".term.ApiActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- termux-open <file>: content:// URIs for files in filesDir (home, usr) and on shared storage -->
         <provider

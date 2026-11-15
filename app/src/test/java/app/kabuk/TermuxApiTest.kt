@@ -131,7 +131,7 @@ class TermuxApiTest {
     }
 
     @Test fun unsupportedCommandsSaySo() {
-        for (name in listOf("termux-sms-send", "termux-camera-photo", "termux-location", "termux-sensor", "termux-dialog",
+        for (name in listOf("termux-sms-send", "termux-contact-list", "termux-call-log", "termux-telephony-call", "termux-saf-read",
                 "termux-brightness", "termux-notification-list", "termux-saf-ls", "termux-job-scheduler")) {
             val r = p(name, "-h") as Action.Reply
             assertEquals(name, 1, r.code)
