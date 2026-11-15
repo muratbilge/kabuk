@@ -1,6 +1,8 @@
 package app.kabuk.term
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import app.kabuk.data.Settings
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
@@ -13,7 +15,11 @@ import com.termux.terminal.TerminalSessionClient
  * login shell.
  */
 class LocalTab(id: Long, ctx: Context, val busybox: Boolean = false) : TermTab(id, if (busybox) "Phone (busybox)" else "Phone", 0xFF9ECE6A) {
+    var properties by androidx.compose.runtime.mutableStateOf(TermuxProperties.Snapshot())
+        private set
+    internal var hideKeyboardRequested = false
     private val client = object : TerminalSessionClient by QuietSessionClient {
+        override fun getTerminalCursorStyle(): Int = properties.cursorStyle
         override fun onTextChanged(changedSession: TerminalSession) = screenChanged()
         override fun onTitleChanged(changedSession: TerminalSession) {
             title.value = changedSession.title?.takeIf { it.isNotBlank() } ?: defaultTitle
@@ -39,10 +45,27 @@ class LocalTab(id: Long, ctx: Context, val busybox: Boolean = false) : TermTab(i
 
     init {
         val setup = LocalTools.prepare(ctx, termux = !busybox)
+        properties = TermuxProperties.load(setup.home).first
         termux = setup.termux
-        session = TerminalSession(setup.shell, setup.home.absolutePath, setup.args, setup.env, Settings.current.scrollbackLines, client)
+        session = TerminalSession(setup.shell, setup.home.absolutePath, setup.args, setup.env, properties.prefs(Settings.current).scrollbackLines, client)
         session.updateSize(80, 24)
+        applyProperties(properties)
         status.value = Status.Connected
+    }
+
+    fun applyProperties(value: TermuxProperties.Snapshot) {
+        properties = value
+        hideKeyboardRequested = value.hideKeyboard
+        emulator?.setCursorStyle()
+        applyColors()
+        onScreenUpdate?.invoke()
+    }
+
+    fun applyColors() {
+        emulator?.mColors?.let { colors ->
+            colors.reset()
+            properties.colors.forEach { (index, color) -> colors.mCurrentColors[index] = color }
+        }
     }
 
     override val emulator: TerminalEmulator? get() = session.emulator

@@ -254,7 +254,7 @@ object TabManager {
 
     fun bell(t: TermTab) {
         if (current.value != t.id) t.unread.value = true
-        if (Settings.current.bellVibrate) vibrate(40)
+        if (((t as? LocalTab)?.properties?.prefs(Settings.current) ?: Settings.current).bellVibrate) vibrate(40)
     }
 
     fun vibrate(ms: Long) {

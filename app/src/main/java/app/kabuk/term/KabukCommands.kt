@@ -95,7 +95,7 @@ Open a file or URL in an external app.
             if (args.isNotEmpty()) Action.Reply(1, "usage: $name\n")
             else Action.WakeLock(name == "termux-wake-lock")
         "termux-reload-settings" ->
-            if (args.isNotEmpty()) Action.Reply(0, "usage: termux-reload-settings\nRe-reads ~/.termux/termux.properties (the settings Kabuk supports).\n")
+            if (args.isNotEmpty()) Action.Reply(0, "usage: termux-reload-settings\nRe-reads ~/.termux/termux.properties, colors.properties and font.ttf.\n${TermuxProperties.help}")
             else Action.ReloadSettings
         "termux-open" -> parseOpen(args, cwd)
         "am", "termux-am" -> parseAm(name, args, cwd)

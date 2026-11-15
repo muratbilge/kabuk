@@ -353,11 +353,8 @@ com.termux/com.termux.app.TermuxOpenReceiver` → termux-open, `broadcast -a com
 - `am`/`termux-am`: `start`, `broadcast` with `-a -d -t -c -n -f --es/-e --esn --ez --ei --el --ef --eu --esa --user
   0|current --grant-read-uri-permission -W`; other subcommands/options, other services, `com.termux*` targets
   (Termux:API) → exit 1 with "… is not supported in Kabuk". Real `am` (app_process) is shadowed.
-- `termux-reload-settings`: `~/.termux/termux.properties` (or `~/.config/termux/`): `terminal-transcript-rows`
-  (100..50000 → scrollback of new tabs), `bell-character` (vibrate|ignore), `volume-keys` (virtual|volume) go into
-  Kabuk's settings; the other keys are listed as ignored (extra-keys: Kabuk has its own key bar; colors.properties,
-  font.ttf: Settings → Theme). *Verified*: "Applied: terminal-transcript-rows=12000 (new tabs), bell-character=ignore /
-  Ignored (not supported in Kabuk): extra-keys, use-black-ui".
+- `termux-reload-settings`: reads Phone-only settings, colors and font at startup and live on reload; see B11
+  below. The original B4 implementation applied three properties globally; B11 replaces that behavior.
 - `termux-info` (a script in kabuk/bin): Kabuk's version (`KABUK_VERSION`), architecture, repositories, mirror group,
   upgradable packages, termux-tools version, package count, Android/kernel/device, LD_PRELOAD.
 - busybox's shell gets `termux-open`, `termux-wake-lock`, `termux-wake-unlock` too (not `am`: `/system/bin/am`
@@ -544,3 +541,32 @@ aarch64 but returns 404 for `binary-x86_64`, which pkg's test does not catch: on
 fails the update (rerun `pkg update` picks again). No mirror is dead for both arches in a way pkg misses, so the group
 stays as is.
 
+
+### B11 — Phone settings (unreleased)
+
+Each Phone tab (including busybox) reads `~/.termux/termux.properties` at startup. Reload updates all open Phone
+tabs without restarting their shells; SSH settings and the saved Kabuk preferences stay unchanged. Removing a
+setting/file restores its Kabuk default. `~/.config/termux/termux.properties` is the fallback properties path.
+
+- `extra-keys`: JSON-ish arrays (single/double quotes, unquoted object keys, backslash line continuations),
+  strings or `{key, display, popup, macro}` objects. Popups use swipe-up. Macros execute whitespace-separated
+  key sequences; CTRL/ALT/SHIFT/FN apply to the following token, with prior sticky state restored afterward.
+  Empty `[]` hides the bar. Invalid layouts restore Kabuk's bar and reload prints an error without the value.
+  Limits: 16 rows, 32 keys per row, 256 macro tokens, 256 KiB properties/colors file.
+- `extra-keys-style`: default, arrows-only, arrows-all, all, none. Display overrides take precedence.
+  KEYBOARD toggles the IME; DRAWER opens Servers. FN uses Kabuk's existing Termux-style Fn mappings.
+  Custom bars keep their own rows instead of being replaced by automatic answer chips.
+- `colors.properties`: foreground, background, cursor, color0..color15 (`#RGB` or `#RRGGBB`). Per-emulator
+  palette overrides survive changing Kabuk's base theme. Invalid entries fall back individually and are reported.
+- `font.ttf`: Android Typeface loading (32 MiB limit), falls back to JetBrains Mono on error. Reload rebuilds
+  rendering metrics and resizes the terminal. A font-only or colors-only setup works without termux.properties.
+- `terminal-cursor-style`: block, underline, bar; `terminal-cursor-blink-rate`: 0 (steady), or 100..2000 ms.
+  The visible view owns the blink callback and cancels it on detach/tab switch; SSH retains its steady cursor.
+- `use-black-ui`: black Phone tab-strip/key-bar chrome; does not replace terminal palette colors.
+  `hide-soft-keyboard-on-startup`: hides the IME on first Phone display and reload when true (manual opening still works).
+- Existing `terminal-transcript-rows` (100..50000, new tabs), `bell-character` (vibrate|ignore), and `volume-keys`
+  (virtual|volume) are now Phone-only. `fullscreen`, `shortcut.*`, and other unsupported properties are reported
+  as ignored. No terminal/file contents are logged.
+
+Parser reference: [Termux extra-key definitions](https://github.com/termux/termux-app/blob/master/termux-shared/src/main/java/com/termux/shared/termux/extrakeys/ExtraKeysConstants.java).
+Validation and device limitations: `REPORT-codex.md`.

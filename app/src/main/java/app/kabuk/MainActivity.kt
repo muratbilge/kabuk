@@ -321,7 +321,7 @@ class MainActivity : ComponentActivity() {
 
     /** Termux-style volume keys: Volume Down held = Ctrl, Volume Up held = Fn */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (Settings.current.volumeKeys && screen == Screen.Terminal) {
+        if (((ui.target as? app.kabuk.term.LocalTab)?.properties?.prefs(Settings.current) ?: Settings.current).volumeKeys && screen == Screen.Terminal) {
             val down = event.action == KeyEvent.ACTION_DOWN
             when (event.keyCode) {
                 KeyEvent.KEYCODE_VOLUME_DOWN -> { ui.mods.volumeCtrl = down; return true }

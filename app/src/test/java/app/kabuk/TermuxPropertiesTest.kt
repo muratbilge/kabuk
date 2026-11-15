@@ -33,12 +33,12 @@ class TermuxPropertiesTest {
         assertEquals(20000, n.scrollbackLines)
         assertFalse(n.bellVibrate)
         assertTrue(n.volumeKeys)
-        assertEquals(listOf("extra-keys", "use-black-ui"), r.ignored)
-        assertEquals(3, r.applied.size)
+        assertTrue(r.ignored.isEmpty())
+        assertEquals(5, r.applied.size)
         val text = r.describe()
-        assertTrue(text, text.contains("Applied: terminal-transcript-rows=20000"))
-        assertTrue(text, text.contains("Ignored (not supported in Kabuk): extra-keys, use-black-ui"))
-        assertTrue(text, text.contains("extra-keys are ignored"))
+        assertTrue(text, text.contains("terminal-transcript-rows=20000"))
+        assertTrue(text, text.contains("Phone tabs only"))
+        assertFalse(text, text.contains("extra-keys are ignored"))
     }
 
     @Test fun badValuesAreReportedNotApplied() {

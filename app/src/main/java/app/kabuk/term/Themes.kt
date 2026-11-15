@@ -35,6 +35,6 @@ object Themes {
         p["foreground"] = c[0]; p["background"] = c[1]; p["cursor"] = c[2]
         for (i in 0 until 16) p["color$i"] = c[3 + i]
         TerminalColors.COLOR_SCHEME.updateWith(p)
-        tabs.forEach { it.emulator?.mColors?.reset(); it.onScreenUpdate?.invoke() }
+        tabs.forEach { if (it is LocalTab) it.applyColors() else it.emulator?.mColors?.reset(); it.onScreenUpdate?.invoke() }
     }
 }

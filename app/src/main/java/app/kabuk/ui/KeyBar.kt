@@ -59,6 +59,9 @@ sealed class KeyAction {
     data class Text(val s: String) : KeyAction()
     /** bytes sent exactly as written */
     data class Raw(val s: String) : KeyAction()
+    data class Sequence(val actions: List<KeyAction>) : KeyAction()
+    data object Fn : KeyAction()
+    data object Drawer : KeyAction()
     data object Ctrl : KeyAction()
     data object Alt : KeyAction()
     data object Shift : KeyAction()
@@ -108,10 +111,11 @@ class ModifierState : Modifiers {
     var ctrl by mutableStateOf(Mod.OFF)
     var alt by mutableStateOf(Mod.OFF)
     var shift by mutableStateOf(Mod.OFF)
+    var fnKey by mutableStateOf(Mod.OFF)
     /** physical volume keys held down (Termux style) */
     var volumeCtrl = false
     var volumeFn = false
-    private val lastTap = LongArray(3)
+    private val lastTap = LongArray(4)
 
     fun tap(which: Int) {
         val now = System.currentTimeMillis()
@@ -122,13 +126,13 @@ class ModifierState : Modifiers {
             m == Mod.ONCE && double -> Mod.LOCKED
             else -> Mod.OFF
         }
-        when (which) { 0 -> ctrl = next(ctrl); 1 -> alt = next(alt); else -> shift = next(shift) }
+        when (which) { 0 -> ctrl = next(ctrl); 1 -> alt = next(alt); 2 -> shift = next(shift); else -> fnKey = next(fnKey) }
     }
 
     override fun takeCtrl(): Boolean = volumeCtrl || take(ctrl) { ctrl = it }
     override fun takeAlt(): Boolean = take(alt) { alt = it }
     override fun takeShift(): Boolean = take(shift) { shift = it }
-    override fun fn(): Boolean = volumeFn
+    override fun fn(): Boolean = volumeFn || take(fnKey) { fnKey = it }
 
     private inline fun take(m: Mod, set: (Mod) -> Unit): Boolean {
         if (m == Mod.ONCE) set(Mod.OFF)
@@ -144,12 +148,13 @@ class ModifierState : Modifiers {
 @Composable
 fun KeyBar(
     mods: ModifierState, tabId: Long?, onAction: (KeyAction) -> Unit, modifier: Modifier = Modifier,
+    keys: List<List<Key>> = defaultKeys, black: Boolean = false,
     promptOpen: Boolean = false, choices: List<Choice> = emptyList(), onChoice: (Choice?) -> Unit = {},
 ) {
     // "show me the keys" lasts until this menu is gone
     var keysInstead by remember(choices.isEmpty()) { mutableStateOf(false) }
-    Column(modifier.fillMaxWidth().background(Surface1).padding(horizontal = 2.dp, vertical = 1.dp)) {
-        defaultKeys.forEachIndexed { i, row ->
+    Column(modifier.fillMaxWidth().background(if (black) Color.Black else Surface1).padding(horizontal = 2.dp, vertical = 1.dp)) {
+        keys.forEachIndexed { i, row ->
             // keys and the answer row share one height: switching between them never resizes the terminal
             Row(Modifier.fillMaxWidth().height(KeyRowHeight)) {
                 if (i == 0 && choices.isNotEmpty() && !keysInstead) {
@@ -230,6 +235,8 @@ private fun KeyButton(key: Key, mods: ModifierState, tabId: Long?, onAction: (Ke
     val modState = when {
         key.action == KeyAction.Ctrl -> mods.ctrl
         key.action == KeyAction.Alt -> mods.alt
+        key.action == KeyAction.Shift -> mods.shift
+        key.action == KeyAction.Fn -> mods.fnKey
         lit -> Mod.ONCE   // a toggle that's on (✎ while the message box is open)
         else -> Mod.OFF
     }

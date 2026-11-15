@@ -72,6 +72,7 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
             field?.let { if (it.onScreenUpdate === screenCallback) it.onScreenUpdate = null }
             field = value
             if (isAttachedToWindow) value?.onScreenUpdate = screenCallback
+            applyPhoneSettings()
             topRow = 0
             clearSelection()
             updateSize()
@@ -80,8 +81,9 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
 
     private val emulator: TerminalEmulator? get() = tab?.emulator
 
-    private val typeface: Typeface =
+    private val defaultTypeface: Typeface =
         ResourcesCompat.getFont(context, R.font.jetbrains_mono) ?: Typeface.MONOSPACE
+    private var typeface = defaultTypeface
     private var fontSizeSp = Settings.current.fontSizeSp
     private var renderer = makeRenderer()
     private val density = resources.displayMetrics.density
@@ -119,6 +121,41 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
 
     private fun makeRenderer() = TerminalRenderer((fontSizeSp * resources.displayMetrics.scaledDensity).roundToInt(), typeface)
 
+    private var appliedProperties: TermuxProperties.Snapshot? = null
+    private var blinkOn = true
+    private val blink = object : Runnable {
+        override fun run() {
+            val rate = (tab as? LocalTab)?.properties?.blinkRate ?: 0
+            if (!isAttachedToWindow || rate == 0) return
+            blinkOn = !blinkOn
+            emulator?.setCursorBlinkState(blinkOn)
+            invalidate()
+            postDelayed(this, rate.toLong())
+        }
+    }
+
+    fun applyPhoneSettings() {
+        val p = (tab as? LocalTab)?.properties
+        if (appliedProperties !== p) {
+            appliedProperties = p
+            typeface = p?.font ?: defaultTypeface
+            renderer = makeRenderer()
+            updateSize()
+        }
+        removeCallbacks(blink)
+        blinkOn = true
+        emulator?.setCursorBlinkState(true)
+        emulator?.setCursorBlinkingEnabled((p?.blinkRate ?: 0) > 0)
+        if (isAttachedToWindow && (p?.blinkRate ?: 0) > 0) postDelayed(blink, p!!.blinkRate.toLong())
+        (tab as? LocalTab)?.let { local ->
+            if (local.hideKeyboardRequested && isAttachedToWindow) {
+                hideKeyboard()
+                local.hideKeyboardRequested = false
+            }
+        }
+        invalidate()
+    }
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
@@ -140,12 +177,14 @@ class TerminalCanvasView(context: Context, private val modifiers: Modifiers) : V
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         tab?.onScreenUpdate = screenCallback
+        applyPhoneSettings()
         invalidate()
     }
 
     override fun onDetachedFromWindow() {
         // don't keep the activity alive through the process-wide tab
         tab?.let { if (it.onScreenUpdate === screenCallback) it.onScreenUpdate = null }
+        removeCallbacks(blink)
         scroller.forceFinished(true)
         super.onDetachedFromWindow()
     }
