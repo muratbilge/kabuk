@@ -345,3 +345,49 @@ Unit tests, emulator check for 1+2, docs + History 0.8.5, gate green, commits [c
 
 ### B9 released as 0.8.5 (41), 2026-11-15. Decisions: librehat mirror stays (x86_64-only 404, emulator only; pkg
 re-picks on rerun); Ctrl-C on a waiting request restarts the line being spoken (engine stops all) — accepted.
+
+### Murat 2026-11-15: "for kabuk fix all remains" → B10 (more Termux:API, Opus) and B11 (termux.properties, Codex)
+run in parallel in separate worktrees (.worktrees/claude, .worktrees/codex); one release 0.8.6 after both are reviewed.
+
+### Brief: B10 — Termux:API commands that need permissions (worker: Opus, .worktrees/claude, branch claude/api2)
+Same channel/conventions as B6 (TermuxApi.kt). Runtime permissions are requested by Kabuk's activity when a command
+needs one (a small transparent PermissionActivity or the main activity; the command waits via the keep-alive and
+answers "permission denied" exit 1 if refused; never prompt while Kabuk is in the background → clear error).
+1. `termux-location [-p gps|network|passive] [-r once|last|updates] [-d ms]` JSON like Termux:API (latitude,
+   longitude, altitude, accuracy, vertical_accuracy, bearing, speed, elapsedMs, provider). ACCESS_FINE/COARSE_LOCATION.
+   updates: one JSON object per line until Ctrl-C (streamed answers: extend the protocol if needed, kabuk-open 5,
+   backward compatible) — if streaming is too big, support once/last and say so.
+2. `termux-dialog` widgets: confirm, text (-m multiline, -n numeric, -p password), checkbox, radio, sheet, spinner,
+   counter, date, time (-t title, -i hint, -v values) → JSON {code, text[, index|values]} as Termux:API. Kabuk's own
+   Compose dialog over the terminal; only when Kabuk is in the foreground.
+3. `termux-camera-info` (JSON), `termux-camera-photo [-c id] file.jpg` (Camera2 or CameraX still capture without
+   preview UI, CAMERA permission; file written where asked, path inside app data or /sdcard).
+4. `termux-sensor -l | -s names [-d ms] [-n count] | -a` JSON lines; `termux-sensor -c` cleanup no-op.
+5. `termux-storage-get file` (ACTION_OPEN_DOCUMENT → copy to file), `termux-saf-*` stay unsupported (say so).
+6. `termux-microphone-record -f file [-l limit] [-e encoder]` / `-q` (MediaRecorder in SessionService, RECORD_AUDIO,
+   notification while recording), `termux-media-player play|pause|stop|info file` (MediaPlayer).
+7. `termux-contacts-list`, `termux-call-log`, `termux-sms-*`, `termux-telephony-*`: stay unsupported unless trivial;
+   no SMS/phone permissions (Play Protect risk) — keep the clear message.
+Manifest permissions only for what is implemented; none logged beyond command name + outcome. Emulator evidence
+(emulator has virtual GPS via `adb emu geo fix`, virtual camera, sensors), unit tests, docs + History, gate green,
+commits [claude], REPORT-claude.md; no bump/release/push.
+
+### Brief: B11 — ~/.termux settings in the Phone tab (worker: Codex, .worktrees/codex, branch codex/termux-props)
+Today TermuxProperties.kt applies only terminal-transcript-rows, bell-character, volume-keys; extra-keys,
+colors.properties and font.ttf are ignored. Make Termux setups work in Kabuk's Phone tabs:
+1. `extra-keys` (+ `extra-keys-style`): parse Termux's JSON-ish format (rows of keys; strings like ESC, TAB, CTRL,
+   ALT, SHIFT, FN, UP/DOWN/LEFT/RIGHT, HOME/END/PGUP/PGDN, F1-F12, BKSP, DEL, INS, KEYBOARD, DRAWER, PASTE, literal
+   chars; objects {key, popup, display, macro}) into Kabuk's KeyBar model (ui/KeyBar.kt Key/KeyAction, popup = Key.up,
+   macro = sequence). Used for Phone tabs only when the file sets extra-keys; SSH tabs keep Kabuk's bar. Invalid
+   value → Kabuk's bar + an error line from termux-reload-settings. Unit tests with Termux's documented examples.
+2. `~/.termux/colors.properties` (foreground, background, cursor, color0..color15) → a per-Phone-tab theme
+   override (term/Themes.kt); `~/.termux/font.ttf` → Phone-tab font (Typeface.createFromFile; fall back on error).
+3. More props where Kabuk has an equivalent: terminal-cursor-style (block|underline|bar),
+   terminal-cursor-blink-rate, fullscreen (ignore → say so), use-black-ui, hide-soft-keyboard-on-startup,
+   shortcut.* (ignore → say so). Update SUPPORTED + the help text of termux-reload-settings.
+4. Applied at Phone-tab start and on `termux-reload-settings` (live, no restart).
+Rules: work only in .worktrees/codex; commits with prefix [codex]; never push/release/bump the version/touch
+~/apk-share; gate `JAVA_HOME=~/tools/jdk-17.0.19+10 ./gradlew -q testDebugUnitTest assembleDebug` green (Gradle
+may need network: if the sandbox blocks it, say so). Never log terminal contents or file contents. The emulator
+runs in docker (see docs/LOCAL-TOOLS.md); if your sandbox can't use docker, skip it: the orchestrator checks on the
+emulator. Write REPORT-codex.md (built, verified, unverified, questions) and commit it, then stop and say "B11 done".
