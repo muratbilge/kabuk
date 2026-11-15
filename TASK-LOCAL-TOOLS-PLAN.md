@@ -342,3 +342,6 @@ notification posted, vibrate -f 1000 ms. Pushed fa033b0. Murat chose: small left
    Termux's pkg already retries another; if a mirror in our default group is dead for both arches, drop it from the
    chosen group (look at etc/termux/mirrors/europe); report only if nothing to change.
 Unit tests, emulator check for 1+2, docs + History 0.8.5, gate green, commits [claude], REPORT-claude.md; no bump/release/push.
+
+### B9 released as 0.8.5 (41), 2026-11-15. Decisions: librehat mirror stays (x86_64-only 404, emulator only; pkg
+re-picks on rerun); Ctrl-C on a waiting request restarts the line being spoken (engine stops all) — accepted.
