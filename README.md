@@ -153,7 +153,11 @@ Termux's collection, with bash as the shell.
   vibrate, up to three buttons; `--action`/button actions run as shell commands in the background) and
   `termux-notification-remove`, `termux-share`, `termux-battery-status`, `termux-wifi-connectioninfo` (JSON),
   `termux-volume`, `termux-media-scan`, `termux-download`. Same options and output as Termux:API; text can come
-  from stdin. The rest (SMS, camera, location, sensors, dialogs, SAF, …) say "not supported in Kabuk".
+  from stdin. Since 0.8.6 also `termux-location` (once/last/updates), `termux-dialog` (confirm, text, checkbox,
+  radio, sheet, spinner, counter, date, time), `termux-camera-info`/`-photo`, `termux-sensor`, `termux-storage-get`,
+  `termux-microphone-record` and `termux-media-player`; Kabuk asks for the location, camera or microphone permission
+  the first time such a command runs while Kabuk is on screen. The rest (SMS, telephony, contacts, call log, SAF, …)
+  say "not supported in Kabuk".
   `termux-notification --priority high|max` goes to the "Scripts (important)" channel (shown on top);
   `termux-tts-speak` returns when the text has been spoken. After `pkg install termux-api` its scripts are Kabuk's
   commands also when called by full path (`$PREFIX/bin/termux-toast`; 0.8.4).
@@ -233,9 +237,14 @@ the notices of its Go modules in the same place).
 
 ## History
 
-- **Unreleased — B11.** Phone tabs read ~/.termux key layouts, colors, font and cursor settings at start and on
-  `termux-reload-settings`; SSH tabs retain Kabuk settings.
-
+- **0.8.6 — Termux:API commands with permissions.** `termux-location` (`-r updates` prints a line per fix until
+  Ctrl-C), `termux-dialog` (Kabuk's own dialogs over the terminal), `termux-camera-info`/`-photo`, `termux-sensor`
+  (streamed until Ctrl-C or `-n`), `termux-storage-get` (the system file picker), `termux-microphone-record` (the
+  session notification shows the recording and can stop it) and `termux-media-player`. Kabuk asks for the location,
+  camera or microphone permission when such a command first runs while it is on screen; refused or in the
+  background, the command says so. Phone tabs also read `~/.termux`: `extra-keys` (rows, popups, macros),
+  `colors.properties`, `font.ttf`, cursor style/blink, black UI and keyboard-at-start, at start and on
+  `termux-reload-settings`; SSH tabs keep Kabuk's settings.
 - **0.8.5 — leftovers.** Ctrl-C on one `termux-tts-speak` (or giving up on a stuck one) stops only that text; other
   queued speech goes on, and a request waiting behind a long text is no longer cut off. "+" offers "Phone (busybox)"
   also while the Termux install is damaged; the Servers screen's ⋮ offers it and Repair there too.

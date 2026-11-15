@@ -46,6 +46,8 @@ object KabukCommands {
         data class Api(val req: TermuxApi.Req) : Action()
         /** the command needs the program's stdin (only when it isn't a terminal: [onlyIfPiped]); parse again with it */
         data class NeedStdin(val onlyIfPiped: Boolean) : Action()
+        /** a Termux:API command that needs a permission, a dialog or a stream ([TermuxDevices]) */
+        data class Device(val req: TermuxDevices.Req) : Action()
     }
 
     /** An intent as `am` describes it. */
@@ -77,16 +79,19 @@ Open a file or URL in an external app.
   --content-type type  specify the content type to use
 """
 
-    /** A decoded request; [keepAlive]: the program understands `<base>.wait` keep-alives ("kabuk-req 2"). */
-    data class Request(val cwd: String, val name: String, val args: List<String>, val keepAlive: Boolean)
+    /**
+     * A decoded request; [keepAlive]: the program understands `<base>.wait` keep-alives ("kabuk-req 2"); [streams]:
+     * it also prints streamed output `<base>.o1`, `.o2` … ("kabuk-req 3", kabuk-open 5).
+     */
+    data class Request(val cwd: String, val name: String, val args: List<String>, val keepAlive: Boolean, val streams: Boolean = false)
 
     /** Request file bytes → [Request]; null when it isn't one. */
     internal fun decode(bytes: ByteArray): Request? {
         val parts = String(bytes, Charsets.UTF_8).split('\u0000')
         // NUL-terminated: the last split part is the empty tail
         if (parts.size < 4 || parts.last().isNotEmpty()) return null
-        val keepAlive = when (parts[0]) { "kabuk-req 1" -> false; "kabuk-req 2" -> true; else -> return null }
-        return Request(parts[1], parts[2], parts.subList(3, parts.size - 1), keepAlive)
+        val version = when (parts[0]) { "kabuk-req 1" -> 1; "kabuk-req 2" -> 2; "kabuk-req 3" -> 3; else -> return null }
+        return Request(parts[1], parts[2], parts.subList(3, parts.size - 1), keepAlive = version >= 2, streams = version >= 3)
     }
 
     /** What [name] with [args], run in [cwd], asks for; [stdin]: the program's input, once handed over. */
@@ -289,10 +294,14 @@ Open a file or URL in an external app.
             answerLater(dir, base, null, if (action.onlyIfPiped) "stdin-if-piped" else "stdin")
             return
         }
-        val call = Call(dir, base, name)
+        val call = Call(dir, base, name, req.streams)
         if (req.keepAlive) call.keepAlive()
         val reply = { a: Answer -> call.answer(a) }
         val failed = { e: Throwable -> KLog.w(TAG, "$name failed", e); Answer(1, "$name: ${e.javaClass.simpleName}: ${e.message}\n") }
+        if (action is Action.Device) {
+            runCatching { TermuxDevices.execute(TabManager.app, name, action.req, call) }.onFailure { call.answer(failed(it)) }
+            return
+        }
         if (action is Action.Api) {
             val r = action.req
             // walking a tree can take a while: not on the main thread
@@ -313,18 +322,49 @@ Open a file or URL in an external app.
     private const val KEEP_ALIVE_MAX_MS = 3_600_000L
     private val ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "cmd-keepalive").apply { isDaemon = true } }
 
+    /** Streamed pieces the program has not printed yet, at most: beyond this new ones are dropped (Ctrl-Z, a slow pipe). */
+    private const val MAX_UNREAD_PIECES = 64
+
     /**
      * One running request. With [keepAlive] it creates `<base>.wait` every [KEEP_ALIVE_MS] until it is answered, so
      * the program keeps waiting (speech until it is spoken, a long media scan). It stops when the program is gone
      * (Ctrl-C: kill(pid, 0) says ESRCH); the answer is then dropped instead of left behind in the dir. Answers once.
+     * [streaming] (kabuk-open 5): [emit] writes `<base>.o<n>` pieces the program prints as they come; without it the
+     * first piece is the whole answer.
      */
-    private class Call(val dir: File, val base: String, val name: String) {
+    internal class Call(val dir: File, val base: String, val name: String, override val streaming: Boolean) : TermuxDevices.Session {
         private var done = false
-        private var gone = false
+        @Volatile override var gone = false
+            private set
         private var tick: java.util.concurrent.ScheduledFuture<*>? = null
         private val wait get() = File(dir, "$base.wait")
+        /** the next piece's number (`<base>.o<seq>`) */
+        private var seq = 1
         /** runs (on the keep-alive thread) when the program is found gone before the answer */
         @Volatile var onGone: (() -> Unit)? = null
+
+        override fun onGone(f: () -> Unit) { onGone = f }
+
+        override fun emit(text: String): Boolean {
+            if (!streaming) { answer(Answer(0, text)); return false }
+            synchronized(this) {
+                if (done || gone) return false
+                // the program does not keep up (stopped with Ctrl-Z?): drop this piece rather than fill the dir
+                if (seq > MAX_UNREAD_PIECES && File(dir, "$base.o${seq - MAX_UNREAD_PIECES}").exists()) return true
+                runCatching {
+                    val tmp = File(dir, ".$base.o$seq.tmp")
+                    tmp.writeText(text)
+                    tmp.renameTo(File(dir, "$base.o$seq"))
+                    seq++
+                }.onFailure { KLog.w(TAG, "$name: could not write output: ${it.javaClass.simpleName}") }
+                return true
+            }
+        }
+
+        /** the pieces the program will never print (it is gone) */
+        private fun dropPieces() {
+            for (n in maxOf(1, seq - MAX_UNREAD_PIECES) until seq) File(dir, "$base.o$n").delete()
+        }
 
         fun keepAlive() {
             val started = System.currentTimeMillis()
@@ -335,6 +375,7 @@ Open a file or URL in an external app.
                     when {
                         pid != null && !alive(pid) -> {
                             gone = true; wait.delete(); tick?.cancel(false)
+                            dropPieces()
                             onGone?.invoke()
                             KLog.i(TAG, "$name: the program ended before the answer (Ctrl-C?)")
                         }
@@ -345,7 +386,7 @@ Open a file or URL in an external app.
             }, KEEP_ALIVE_MS, KEEP_ALIVE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         }
 
-        fun answer(a: Answer) = Thread({
+        override fun answer(a: Answer) { Thread({
             synchronized(this) {
                 if (done) return@synchronized
                 done = true
@@ -353,7 +394,7 @@ Open a file or URL in an external app.
                 wait.delete()
                 if (!gone) KabukCommands.answer(dir, base, a)
             }
-        }, "cmd-answer").start()
+        }, "cmd-answer").start() }
     }
 
     /** The program's pid from the request's base name (`<ms>-<pid>`). */
@@ -384,7 +425,7 @@ Open a file or URL in an external app.
 
     /** Main thread. ([Action.Api] and [Action.NeedStdin] are handled by [run].) */
     internal fun execute(ctx: Context, name: String, action: Action): Answer = when (action) {
-        is Action.Api, is Action.NeedStdin -> error("handled by run")
+        is Action.Api, is Action.NeedStdin, is Action.Device -> error("handled by run")
         is Action.Reply -> {
             if (action.code != 0) KLog.i(TAG, "$name: refused or bad usage (exit ${action.code})")
             Answer(action.code, action.text)

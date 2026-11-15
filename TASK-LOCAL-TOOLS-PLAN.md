@@ -391,3 +391,13 @@ Rules: work only in .worktrees/codex; commits with prefix [codex]; never push/re
 may need network: if the sandbox blocks it, say so). Never log terminal contents or file contents. The emulator
 runs in docker (see docs/LOCAL-TOOLS.md); if your sandbox can't use docker, skip it: the orchestrator checks on the
 emulator. Write REPORT-codex.md (built, verified, unverified, questions) and commit it, then stop and say "B11 done".
+
+### B10 + B11 merged for 0.8.6 (42), 2026-11-15
+- B11 (Codex d94f35d): ~/.termux extra-keys/colors/font/cursor/black UI/hide keyboard, Phone tabs only, live reload.
+  Codex's sandbox had no docker/adb: emulator check done by the orchestrator's tester before release.
+- B10 (Opus 6fd4788): location (once/last/updates), dialog widgets, camera-info/photo, sensor, storage-get,
+  microphone-record, media-player; ApiActivity for permission prompts + picker; kabuk-open 5 streamed output
+  (kabuk-req 3, .oN pieces); manifest adds location/camera/mic. Emulator-verified per command; unverified on the
+  phone: real GPS, real cameras/orientation, real audio, Android 16 background camera/mic.
+- Orchestrator decisions on B10's questions: no settings shortcut; a backgrounded `-r updates` stream is left as is;
+  recording name KabukAudioRecording_ stays; termux-dialog usage errors exit 1 (stricter than Termux) is fine.

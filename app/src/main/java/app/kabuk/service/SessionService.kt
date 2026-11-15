@@ -37,6 +37,7 @@ class SessionService : Service() {
             ACTION_WAKE -> toggleWakeLock()
             ACTION_WAKE_ON -> if (wakeLock?.isHeld != true) toggleWakeLock()
             ACTION_WAKE_OFF -> if (wakeLock?.isHeld == true) toggleWakeLock()
+            ACTION_STOP_RECORDING -> app.kabuk.term.TermuxMedia.stopRecording(this, "notification button")
         }
         val n = build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -59,16 +60,21 @@ class SessionService : Service() {
     private fun build(): Notification {
         val n = TabManager.tabs.value.size
         val locked = wakeLock?.isHeld == true
+        val recording = app.kabuk.term.TermuxMedia.recording
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         fun action(a: String, code: Int) = PendingIntent.getService(
             this, code, Intent(this, SessionService::class.java).setAction(a), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (n == 0 && app.kabuk.term.TermuxInstaller.running) "Installing Termux packages"
-                else "$n session${if (n == 1) "" else "s"} open")
+            .setContentTitle(when {
+                recording -> "Recording audio (termux-microphone-record)"
+                n == 0 && app.kabuk.term.TermuxInstaller.running -> "Installing Termux packages"
+                else -> "$n session${if (n == 1) "" else "s"} open"
+            })
             .setContentText(summary() + if (locked) " · wake lock on (CPU stays awake)" else "")
             .setContentIntent(open)
             .setOngoing(true)
+            .apply { if (recording) addAction(Notification.Action.Builder(null, "Stop recording", action(ACTION_STOP_RECORDING, 3)).build()) }
             .addAction(Notification.Action.Builder(null, if (locked) "Release wake lock" else "Acquire wake lock", action(ACTION_WAKE, 1)).build())
             .addAction(Notification.Action.Builder(null, "Exit", action(ACTION_EXIT, 2)).build())
             .build()
@@ -100,6 +106,7 @@ class SessionService : Service() {
         const val ACTION_WAKE = "app.kabuk.WAKE"
         const val ACTION_WAKE_ON = "app.kabuk.WAKE_ON"
         const val ACTION_WAKE_OFF = "app.kabuk.WAKE_OFF"
+        const val ACTION_STOP_RECORDING = "app.kabuk.STOP_RECORDING"
         private var instance: SessionService? = null
 
         @Volatile private var lastShown = ""
@@ -134,7 +141,7 @@ class SessionService : Service() {
         fun refresh() {
             val s = instance ?: return
             val text = s.summary() + "|" + TabManager.tabs.value.size + "|" + (s.wakeLock?.isHeld == true) + "|" +
-                app.kabuk.term.TermuxInstaller.running
+                app.kabuk.term.TermuxInstaller.running + "|" + app.kabuk.term.TermuxMedia.recording
             if (text == lastShown) return
             lastShown = text
             s.getSystemService(NotificationManager::class.java).notify(ID, s.build())
